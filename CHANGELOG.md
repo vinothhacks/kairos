@@ -2,6 +2,23 @@
 
 All notable changes to `kairos` are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.1] - 2026-05-10
+
+Polish pass driven by dogfood ingest of 13 real-world markdown sources and a side-by-side review against `jcode`'s README.
+
+### Added
+- Quick-link nav row under the README hero (Install / Demo / Why / Quickstart / How it works / Commands / Roadmap) for one-click jumping in long-scroll viewers.
+- `docs/launch/linkedin.md` launch kit (drafts only, never auto-posted): single-image launch post, 8-slide carousel script, 5-connection + 3-comment engagement plan, posting cadence, "what if it flops" recovery plan.
+
+### Changed
+- Removed broken `assets/demo.gif` reference from README. The 30-second demo block already serves as the visual demo. A real asciinema-recorded GIF will land in v0.2 once `scripts/record-demo.sh` is run end-to-end with the live MCP backend.
+- Replaced one inline em-dash with a colon in the `30-second demo` follow-up sentence to keep the README consistent with the project's "no em-dashes in marketing copy" rule (em-dashes in code/log/lint output remain unchanged).
+
+### Validated (no code changes; recorded for the v0.2 baseline)
+- Dogfood: 13 real-world markdown sources from this monorepo (llm-mcp README, EXTENSIONS_NEEDED, karpathy-guidelines, skills/_inventory, runtime/runner, runtime/schema, 3 agent personas, 2 input style guides, kairos PRD, kairos architecture) ingested cleanly via `kairos ingest` with `KAIROS_LLM_BACKEND=stub`. 13 / 13 pass; 0 crashes; 0 frontmatter validation errors.
+- `kairos lint` after dogfood: 0 findings on 34 pages (21 seed + 13 ingested source summaries).
+- 48 unit tests still green; 5 e2e shell scripts still green.
+
 ## [0.1.0] - 2026-05-10
 
 The first release. The minimum surface that proves the wedge: an LLM Wiki that picks the right technique and runs it.
@@ -26,4 +43,5 @@ The first release. The minimum surface that proves the wedge: an LLM Wiki that p
 - The `--fix` flag on `lint` is a v0.2 placeholder; v0.1 is report-only.
 - Postgres backend is optional and off by default; v0.1 is SQLite-only in practice.
 
+[0.1.1]: https://github.com/vinothhacks/kairos/releases/tag/v0.1.1
 [0.1.0]: https://github.com/vinothhacks/kairos/releases/tag/v0.1.0

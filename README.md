@@ -9,6 +9,9 @@
     <a href="LICENSE"><img alt="License" src="https://img.shields.io/badge/license-MIT-5eead4?labelColor=0a0a0f"></a>
     <a href="https://github.com/vinothhacks/kairos/actions"><img alt="CI" src="https://github.com/vinothhacks/kairos/workflows/ci/badge.svg"></a>
   </p>
+  <p>
+    <a href="#install">Install</a> · <a href="#30-second-demo">Demo</a> · <a href="#why-kairos">Why kairos</a> · <a href="#quickstart">Quickstart</a> · <a href="#how-it-works">How it works</a> · <a href="#commands">Commands</a> · <a href="#roadmap">Roadmap</a>
+  </p>
 </div>
 
 ---
@@ -52,11 +55,7 @@ $ kairos run "Search the docs for caching and summarize" --dry
    └──────┴───────────┴───────┴──────────────────────────────────┘
 ```
 
-`kairos` looks at your task, queries its wiki of agent techniques, and tells you which pattern to run — RAG, ReAct, or Reflexion. Then it actually runs it.
-
-<div align="center">
-  <img src="assets/demo.gif" alt="kairos demo" width="700" />
-</div>
+`kairos` looks at your task, queries its wiki of agent techniques, and tells you which pattern to run: RAG, ReAct, or Reflexion. Then it actually runs it.
 
 ## Why kairos
 

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "kairos-agent"
-version = "0.1.0"
+version = "0.1.1"
 description = "Stop guessing. Run the right pattern. A CLI for executable agent knowledge."
 readme = "README.md"
 requires-python = ">=3.11,<3.14"
