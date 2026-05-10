@@ -1,0 +1,48 @@
+# python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+.eggs/
+.installed.cfg
+*.egg
+
+# venvs
+.venv/
+venv/
+env/
+.env
+
+# tooling
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+
+# editor
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+
+# kairos local project state (kept in user projects, not in this repo)
+.kairos/kairos.db
+.kairos/runs/
+outputs/
+
+# generated assets we may not want to commit (we DO commit hero/social/logo for v0.1)
+# nothing here yet
+
+# local dev scratchpad
+.scratch/
+
+# uv lock — keep tracked via [[tool.hatch]] but ignore generated venv state
+.python-version
