@@ -65,6 +65,11 @@ jobs:
       - name: Attach wheel + sdist to GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/*
+          # Only ship real artifacts; uv build leaves a marker `.gitignore` in dist/
+          # that we do NOT want as a release asset (caught on v0.2.1).
+          files: |
+            dist/*.whl
+            dist/*.tar.gz
+            dist/*.attestation
           generate_release_notes: true
           fail_on_unmatched_files: true
