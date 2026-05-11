@@ -18,16 +18,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install uv
-        uses: astral-sh/setup-uv@v3
+      - name: Set up kairos (uv venv, no --system)
+        uses: ./.github/actions/setup-kairos
         with:
-          enable-cache: true
-
-      - name: Set up Python
-        run: uv python install ${{ matrix.python-version }}
-
-      - name: Install project with dev extras
-        run: uv pip install --system -e ".[dev]"
+          python-version: ${{ matrix.python-version }}
+          extras: "[dev]"
 
       - name: Run pytest with coverage
         run: uv run pytest -ra --strict-markers --cov=kairos --cov-report=xml --cov-report=term
@@ -46,16 +41,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install uv
-        uses: astral-sh/setup-uv@v3
+      - name: Set up kairos (uv venv, no --system)
+        uses: ./.github/actions/setup-kairos
         with:
-          enable-cache: true
-
-      - name: Set up Python
-        run: uv python install 3.13
-
-      - name: Install project
-        run: uv pip install --system -e ".[dev]"
+          python-version: "3.13"
+          extras: "[dev]"
 
       - name: Ruff check
         run: uv run ruff check src/ tests/
@@ -92,14 +82,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install uv
-        uses: astral-sh/setup-uv@v3
-
-      - name: Set up Python
-        run: uv python install 3.13
-
-      - name: Install project
-        run: uv pip install --system -e .
+      - name: Set up kairos (uv venv, no --system)
+        uses: ./.github/actions/setup-kairos
+        with:
+          python-version: "3.13"
+          extras: ""
 
       - name: Init kairos in tmp
         run: |
@@ -116,8 +103,8 @@ jobs:
         run: |
           set -e
           KAIROS_LLM_BACKEND=stub uv run kairos run "Search the docs for caching" -p /tmp/kairos-ci --dry > /tmp/kairos-ci/demo.actual.txt
-          if grep -q '^selected: ' /tmp/kairos-ci/demo.actual.txt; then
-            echo "Demo header still present, all good."
+          if grep -qE 'top-3 techniques for:' /tmp/kairos-ci/demo.actual.txt && grep -qE '^\| 1 +\| (rag|react|reflexion) ' /tmp/kairos-ci/demo.actual.txt; then
+            echo "Demo header + rank table present; schema unchanged."
           else
             echo "Demo output schema changed - regenerate the README 30-second demo block."
             cat /tmp/kairos-ci/demo.actual.txt

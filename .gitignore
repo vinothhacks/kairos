@@ -13,6 +13,7 @@ dist/
 
 # venvs
 .venv/
+.venv-*/
 venv/
 env/
 .env
@@ -23,8 +24,12 @@ env/
 .ruff_cache/
 .coverage
 .coverage.*
+coverage.xml
 htmlcov/
 .tox/
+
+# diagnostic CI logs pulled via the GH API (transient)
+*.log
 
 # editor
 .idea/
