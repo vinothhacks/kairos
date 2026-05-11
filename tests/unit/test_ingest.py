@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from pathlib import Path
 
 from kairos.llm.mcp_client import StubLLMClient
@@ -10,7 +11,7 @@ from kairos.wiki.init import init_project
 from kairos.wiki.schema import parse_page
 
 
-def _seed_canned(tmp_path: Path, plan: dict) -> StubLLMClient:
+def _seed_canned(tmp_path: Path, plan: Mapping[str, object]) -> StubLLMClient:
     """Produce a StubLLMClient that returns `plan` (as JSON) on any claude_send call."""
     canned_path = tmp_path / "stub.json"
     canned_path.write_text(

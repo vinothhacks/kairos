@@ -1,4 +1,4 @@
-"""Reflexion runner — initial answer -> critique -> revised answer.
+"""Reflexion runner - initial answer -> critique -> revised answer.
 
 We split the work across two providers to demonstrate the cross-provider
 two-model handoff that's a kairos signature: ChatGPT drafts, Claude critiques,
@@ -10,7 +10,7 @@ from pathlib import Path
 from textwrap import dedent
 
 from kairos.llm.mcp_client import LLMClient
-from kairos.runners.base import RunRecorder, RunResult
+from kairos.runners.base import Runner, RunRecorder, RunResult
 
 
 def run_reflexion(
@@ -18,6 +18,8 @@ def run_reflexion(
     task: str,
     project_root: Path,
     llm: LLMClient,
+    selected_by: str = "user",
+    selector_score: float | None = None,
 ) -> RunResult:
     """Two-stage Reflexion (initial -> critique -> revise) using both providers."""
     rec = RunRecorder(project_root=project_root, technique="reflexion", task=task)
@@ -83,4 +85,31 @@ def run_reflexion(
     rec.event("revise_done", reply_chars=len(revised))
 
     final = revised or initial or "(reflexion: empty)"
-    return rec.finish(answer=final, selected_by="user")
+    return rec.finish(answer=final, selected_by=selected_by, selector_score=selector_score)
+
+
+class ReflexionRunner(Runner):
+    """KAI-006: object form of run_reflexion for plugin discovery + dispatch ABC."""
+
+    name = "reflexion"
+
+    def applicable(self, task: str) -> bool:  # noqa: D401
+        return True
+
+    def run(
+        self,
+        *,
+        task: str,
+        project_root: Path,
+        llm: LLMClient,
+        selected_by: str = "user",
+        selector_score: float | None = None,
+        **kwargs: object,
+    ) -> RunResult:
+        return run_reflexion(
+            task=task,
+            project_root=project_root,
+            llm=llm,
+            selected_by=selected_by,
+            selector_score=selector_score,
+        )

@@ -1,4 +1,4 @@
-"""kairos query "<question>" — answer questions over the wiki.
+"""kairos query "<question>" - answer questions over the wiki.
 
 Workflow per AGENTS.md:
   1. Read wiki/index.md.
@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import datetime as _dt
 import re
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from textwrap import dedent
@@ -58,15 +59,23 @@ def query_wiki(
     paths = WikiPaths(root=project_root)
 
     # 1. Pick candidate pages by simple lexical overlap on titles + body keywords.
-    candidates = _rank_candidate_pages(paths, question, top_k=max_pages)
+    # KAI-021: ranker returns parsed pages it already touched so we don't re-read.
+    candidates, parse_cache = _rank_candidate_pages(paths, question, top_k=max_pages)
     pages_read: list[Path] = []
     excerpts: list[str] = []
     for path in candidates:
-        try:
-            text = path.read_text(encoding="utf-8")
-            fm, body = parse_page(text)
-        except Exception:  # noqa: BLE001
-            continue
+        cached = parse_cache.get(path)
+        if cached is not None:
+            fm, body = cached
+        else:
+            try:
+                text = path.read_text(encoding="utf-8")
+                fm, body = parse_page(text)
+            except Exception as e:  # noqa: BLE001
+                # KAI-033: surface skipped pages so a malformed wiki doesn't quietly
+                # produce a thinner answer.
+                print(f"[query] skipping malformed page {path}: {e}", file=sys.stderr)
+                continue
         pages_read.append(path)
         excerpts.append(
             dedent(
@@ -128,7 +137,13 @@ def query_wiki(
 
         today = _dt.date.today()
         slug = slugify(question)[:60]
-        page_path = paths.concepts / f"q-{slug}.md"
+        # KAI-012: include date and counter so two queries on the same day don't clobber.
+        stamp = today.strftime("%Y%m%d")
+        page_path = paths.concepts / f"q-{slug}-{stamp}.md"
+        counter = 1
+        while page_path.exists():
+            counter += 1
+            page_path = paths.concepts / f"q-{slug}-{stamp}-{counter}.md"
         fm = PageFrontmatter(
             title=question,
             type="concept",
@@ -149,24 +164,38 @@ def query_wiki(
     )
 
 
-def _rank_candidate_pages(paths: WikiPaths, question: str, *, top_k: int) -> list[Path]:
-    """Rank wiki pages by token overlap with the question; return top_k paths."""
+def _rank_candidate_pages(
+    paths: WikiPaths, question: str, *, top_k: int
+) -> tuple[list[Path], dict[Path, tuple[PageFrontmatter, str]]]:
+    """Rank wiki pages by token overlap with the question; return top_k paths.
+
+    KAI-021: also returns a `parse_cache` mapping each path we touched to the
+    parsed `(fm, body)` so the caller does not re-parse the same files when
+    composing prompt excerpts.
+    """
     q_tokens = {t for t in _WORD_RE.findall(question.lower()) if t not in _STOPWORDS}
+    parse_cache: dict[Path, tuple[PageFrontmatter, str]] = {}
     if not q_tokens:
-        # fall back: return up to top_k arbitrary concept pages
-        return sorted(paths.concepts.glob("*.md"))[:top_k]
+        return sorted(paths.concepts.glob("*.md"))[:top_k], parse_cache
 
     scored: list[tuple[float, Path]] = []
     for sub in (paths.concepts, paths.sources, paths.comparisons):
         for path in sub.glob("*.md"):
             try:
-                text = path.read_text(encoding="utf-8").lower()
+                text = path.read_text(encoding="utf-8")
             except OSError:
                 continue
-            tokens = set(_WORD_RE.findall(text)) - _STOPWORDS
+            try:
+                fm, body = parse_page(text)
+            except Exception:  # noqa: BLE001
+                continue
+            parse_cache[path] = (fm, body)
+            tokens = set(_WORD_RE.findall(text.lower())) - _STOPWORDS
             score = len(q_tokens & tokens)
-            slug_match = sum(1 for t in q_tokens if t in path.stem)
+            # KAI-028: segment match on slug, not substring.
+            slug_segments = set(path.stem.split("-"))
+            slug_match = sum(1 for t in q_tokens if t in slug_segments)
             scored.append((score + 2.0 * slug_match, path))
 
     scored.sort(key=lambda x: x[0], reverse=True)
-    return [p for s, p in scored[:top_k] if s > 0]
+    return [p for s, p in scored[:top_k] if s > 0], parse_cache

@@ -10,11 +10,26 @@
     <a href="https://github.com/vinothhacks/kairos/actions"><img alt="CI" src="https://github.com/vinothhacks/kairos/workflows/ci/badge.svg"></a>
   </p>
   <p>
-    <a href="#install">Install</a> · <a href="#30-second-demo">Demo</a> · <a href="#why-kairos">Why kairos</a> · <a href="#quickstart">Quickstart</a> · <a href="#how-it-works">How it works</a> · <a href="#commands">Commands</a> · <a href="#roadmap">Roadmap</a>
+    <a href="#install">Install</a> · <a href="#30-second-demo">Demo</a> · <a href="#whats-new-in-v02">What's new in v0.2</a> · <a href="#why-kairos">Why kairos</a> · <a href="#quickstart">Quickstart</a> · <a href="#how-it-works">How it works</a> · <a href="#commands">Commands</a> · <a href="#roadmap">Roadmap</a>
   </p>
 </div>
 
 ---
+
+## What's new in v0.2
+
+**v0.2.0 closes 45 audit findings** we found by auditing our own v0.1.1. Highlights:
+
+- **`.kairos/config.toml`** parser - tune backend, stale window, default technique without env vars.
+- **Plugin runners** via `entry_points(group="kairos.runners")` - `pip install kairos-runner-tot` lands without a fork.
+- **Real `wiki_index` cache** - selector + query stop re-walking the filesystem on every call.
+- **`kairos doctor`** now actually pings `llm-mcp` instead of hard-coding "ok".
+- **`kairos feedback <run-id> --rating N`** - capture quality signal for the runs you care about.
+- **Retries + backoff** in `MCPLLMClient` - 3 attempts with exponential backoff on 5xx + connect errors.
+- **`KAIROS_DB_HOME`** env var - relocate `kairos.db` outside the repo.
+- **`kairos run --json`** + **`--llm-rerank`** - structured output and an optional LLM tie-break.
+
+Full migration notes: [`docs/UPGRADING.md`](docs/UPGRADING.md). Zero breaking changes; `v0.1.x → v0.2.0` is in-place.
 
 ## Install
 
@@ -31,12 +46,12 @@ uv tool install kairos-agent
 
 ```powershell
 # Windows
-irm https://raw.githubusercontent.com/vinothhacks/kairos/main/install.ps1 | iex
+irm https://raw.githubusercontent.com/vinothhacks/kairos/v0.2.0/install.ps1 | iex
 ```
 
 ```bash
 # macOS / Linux
-curl -fsSL https://raw.githubusercontent.com/vinothhacks/kairos/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/vinothhacks/kairos/v0.2.0/install.sh | sh
 ```
 
 ## 30-second demo
@@ -96,33 +111,46 @@ Every run logs to `.kairos/kairos.db` (SQLite). Every page lives in plain markdo
 
 ## How it works
 
-```
-                    ┌─────────────────┐
-   raw/         →   │  kairos ingest  │   →   wiki/concepts/<slug>.md
-   (sources)        └─────────────────┘
-                                                    │
-                                                    │ rebuild index
-                                                    ▼
-                                           ┌────────────────────┐
-   "task" (CLI)  ──────────────────────►   │  technique selector│
-                                           └────────────────────┘
-                                                    │
-                                                    │ rag | react | reflexion
-                                                    ▼
-                                           ┌────────────────────┐
-                                           │   technique runner │  ←── llm-mcp
-                                           └────────────────────┘
-                                                    │
-                                                    ▼
-                                              run trace + answer
-                                              (.kairos/kairos.db)
+```mermaid
+flowchart LR
+    User([User]) --> CLI["typer CLI<br/>cli.py"]
+    CLI --> Cfg["config.load_config()<br/>env > .kairos/config.toml > defaults"]
+    Cfg --> RunCmd["cli run/query/lint/ingest"]
+
+    RunCmd -->|technique=auto| Selector["select_technique"]
+    Selector --> Idx["wiki_index<br/>(SQLite cache)"]
+    Idx -.cache miss.-> FS["wiki/ filesystem walk"]
+    Selector -->|optional --llm-rerank| Rerank["claude_send tie-break"]
+    Selector --> Rank["TechniqueChoice ranking"]
+
+    Rank --> Disp["runners.dispatch<br/>+ entry_points discovery"]
+    Disp --> ABC["Runner ABC"]
+    ABC --> RAG["RagRunner"]
+    ABC --> ReA["ReactRunner"]
+    ABC --> Refl["ReflexionRunner"]
+    ABC -.plugins.-> Plug["kairos-runner-*"]
+
+    RAG --> Rec["RunRecorder.finish<br/>selected_by + score"]
+    ReA --> Rec
+    Refl --> Rec
+
+    Rec --> DB[("kairos.db<br/>WAL + busy_timeout 5s")]
+    DB --> Runs["runs"]
+    DB --> FB["feedback (KAI-035)"]
+    DB --> WI["wiki_index"]
+    DB --> WR["wiki_relations"]
+
+    CLI -->|backend=mcp| MCP["MCPLLMClient<br/>retries + backoff"]
+    MCP --> LLM["llm-mcp server"]
+    CLI --> Doc["kairos doctor<br/>real ping"] --> MCP
+    CLI --> FBcmd["kairos feedback"] --> FB
 ```
 
 Three layers, mirroring [Karpathy's LLM Wiki gist](https://gist.github.com/karpathy):
 
-1. **`raw/`** — your immutable inputs (papers, articles, transcripts). Source of truth.
-2. **`wiki/`** — LLM-generated, human-curated markdown pages. Lives in git.
-3. **`AGENTS.md`** — the schema. Tells future LLM passes how the structure works.
+1. **`raw/`** - your immutable inputs (papers, articles, transcripts). Source of truth.
+2. **`wiki/`** - LLM-generated, human-curated markdown pages. Lives in git.
+3. **`AGENTS.md`** - the schema. Tells future LLM passes how the structure works.
 
 See [`docs/architecture.md`](docs/architecture.md) for the full diagram.
 

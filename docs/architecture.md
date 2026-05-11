@@ -1,6 +1,47 @@
-# Kairos v0.1 Architecture
+# Kairos v0.2 Architecture
+
+> Updated for the v0.2 audit-fix release (2026-05-11). The flow below matches what the code actually does. Aspirational items live under `## v0.3+ surfaces`.
 
 ## High-level flow
+
+```mermaid
+flowchart LR
+    User([User]) --> CLI["typer CLI<br/>cli.py"]
+    CLI --> Cfg["config.load_config()<br/>env > .kairos/config.toml > defaults"]
+    Cfg --> RunCmd["cli run/query/lint/ingest"]
+
+    RunCmd -->|technique=auto| Selector["select_technique"]
+    Selector --> Idx["wiki_index<br/>(SQLite cache, populated)"]
+    Idx -.cache miss / stale.-> FS["wiki/ filesystem walk"]
+    Selector -->|optional --llm-rerank| Rerank["claude_send tie-break"]
+    Selector --> Rank["TechniqueChoice ranking"]
+
+    Rank --> Disp["runners.dispatch<br/>+ entry_points discovery"]
+    Disp --> ABC["Runner ABC"]
+    ABC --> RAG["RagRunner"]
+    ABC --> ReA["ReactRunner"]
+    ABC --> Refl["ReflexionRunner"]
+    ABC -.entry_points.-> Plug["kairos-runner-*<br/>third-party plugins"]
+
+    RAG --> Rec["RunRecorder.finish<br/>selected_by + selector_score"]
+    ReA --> Rec
+    Refl --> Rec
+
+    Rec --> DB[("kairos.db<br/>WAL + busy_timeout 5s")]
+    DB --> Runs["runs (REAL duration_ms)"]
+    DB --> FB["feedback (write path live)"]
+    DB --> WI["wiki_index (write path live)"]
+    DB --> WR["wiki_relations (write path live)"]
+
+    CLI -->|backend=mcp| MCP["MCPLLMClient<br/>3 retries, exp backoff"]
+    MCP --> LLM["llm-mcp server"]
+    CLI --> Doc["kairos doctor<br/>real ping with timeout"] --> MCP
+    CLI --> FBcmd["kairos feedback"] --> FB
+```
+
+> See `architecture.md` (this file) for the canonical mermaid; the same diagram is mirrored in [`README.md`](../README.md#how-it-works) so first-time readers see the same picture.
+
+## Subsystems
 
 ```mermaid
 flowchart TB
@@ -11,6 +52,8 @@ flowchart TB
     CLI --> Query[kairos query]
     CLI --> Lint[kairos lint]
     CLI --> Run[kairos run]
+    CLI --> Feedback[kairos feedback]
+    CLI --> Doctor[kairos doctor]
 
     Run --> Selector[TechniqueSelector]
     Selector -.reads.-> WIKI
@@ -28,10 +71,12 @@ flowchart TB
     RAG --> MCP
     ReAct --> MCP
     Reflexion --> MCP
+    Doctor --> MCP
 
     Ingest --> WIKI
     Lint --> STATE
     Run --> STATE
+    Feedback --> STATE
 
     subgraph WIKI [WIKI - on-disk markdown]
         Raw[raw/]
@@ -43,16 +88,16 @@ flowchart TB
         Schema[AGENTS.md schema]
     end
 
-    subgraph STATE [STATE - SQLite]
+    subgraph STATE [STATE - SQLite, WAL mode]
         DB[(kairos.db)]
         Runs[runs]
-        Feedback[feedback]
-        WikiIndex[wiki_index]
-        WikiRelations[wiki_relations]
+        FbT[feedback]
+        WIT[wiki_index]
+        WRT[wiki_relations]
         DB --- Runs
-        DB --- Feedback
-        DB --- WikiIndex
-        DB --- WikiRelations
+        DB --- FbT
+        DB --- WIT
+        DB --- WRT
     end
 
     subgraph llmmcp [llm-mcp bridge]
@@ -77,8 +122,9 @@ flowchart TB
 ### CLI layer (`src/kairos/cli.py`)
 
 - Built on **Typer** (declarative subcommands, auto `--help`, Rich integration).
-- Subcommands: `init`, `ingest`, `query`, `lint`, `run`, plus housekeeping `version` and `doctor`.
+- Subcommands: `init`, `ingest`, `query`, `lint`, `run`, `feedback`, `doctor`, `version`.
 - All output styled via **Rich**: tables, syntax highlighting for the wiki paths it touched, progress bars for ingest fan-out.
+- v0.2 (KAI-007) renders LLM replies with `markup=False` so `[[wikilinks]]` survive Rich's bracket parser intact.
 
 ### Wiki ops layer (`src/kairos/wiki/`)
 
@@ -89,46 +135,60 @@ flowchart TB
 
 ### Selector (`src/kairos/selector.py`)
 
-- Reads `wiki/index.md` to enumerate every concept page.
-- Sends the user task plus the index + brief summaries to `claude_send` for a ranked recommendation.
-- Returns top-3 techniques with confidence scores; auto-runs top-1 unless `--dry`, `--technique <name>`, or no runner is registered.
+- Reads `wiki_index` SQLite cache first (KAI-021); falls back to a filesystem walk when the cache is empty or stale.
+- Rule-based ranking: keyword boosts + segment-match against page slug (KAI-028) + body lexical overlap.
+- Top-3 ranking, with a top-N tie-break that promotes the safe default (`rag`) when scores cluster within 0.05 (KAI-029).
+- Optional `--llm-rerank` flag (KAI-020): when on and the top-3 are close, calls `claude_send` for a tie-break.
+- Always returns at least one `TechniqueChoice`; auto-runs top-1 unless `--dry`, `--technique <name>`, or no runner is registered.
 
 ### Runners (`src/kairos/runners/`)
 
-- `base.py` — abstract `Runner` with `name`, `applicable(task) -> bool`, `run(task, context) -> Result`.
-- `rag.py` — chunked retrieval over `--source-folder` (or `raw/` by default), context build, single `chatgpt_send` call.
-- `react.py` — Thought / Action / Observation loop, k <= 6 steps, available tools: `claude_search_web`, local `read_file`, sandboxed `shell_run`.
-- `reflexion.py` — initial answer (`chatgpt_send`) -> self-critique (`claude_send`) -> revised answer (`chatgpt_send`).
+- `base.py` - abstract `Runner` with `name`, `applicable(task) -> bool`, `run(task, ctx) -> RunResult` (KAI-006).
+- `__init__.py` - dispatches by name and discovers third-party runners via `entry_points(group="kairos.runners")`.
+- `rag.py` - chunked retrieval over `--source-folder` (or `raw/` by default), 5MB per-file cap (KAI-044), single `chatgpt_send` call.
+- `react.py` - Thought / Action / Observation loop, k <= 6 steps, tools: `search_web`, `read_file`, `finish` (KAI-019).
+- `reflexion.py` - initial answer (`chatgpt_send`) -> self-critique (`claude_send`) -> revised answer (`chatgpt_send`).
+- `RunResult` no longer carries `trace` in memory (KAI-034); the JSONL trace is on disk at `outputs/run-NNNNN/trace.jsonl`. Use `kairos run --json` to inline it.
 
 ### llm-mcp client (`src/kairos/llm/mcp_client.py`)
 
 - Talks to the running `llm-mcp` server (default `http://localhost:8765` or stdio).
 - Wraps the 22+ tools we already have: `chatgpt_send`, `claude_send`, `chatgpt_search_web`, `claude_search_web`, `chatgpt_image_create`, `claude_diagram_create`, `chatgpt_research_*`, `claude_research_*`, etc.
 - Auto-creates a fresh chat per task to avoid stale conversation context.
-- Retries with exponential backoff on UI flake; surfaces clear errors when sessions expire.
+- v0.2 (KAI-017): up to 3 attempts with exponential backoff (0.5s base + jitter) for 5xx + connect errors. 4xx is **never** retried.
+- v0.2 (KAI-015): integration tests inject an `httpx.MockTransport` via the `_transport` attribute - no network needed.
+- v0.2 (KAI-026): `StubLLMClient` default reply is generic, never echoes the prompt, so tests can't accidentally leak content via the stub path.
 
 ### Memory layer (`src/kairos/memory/`)
 
-- `kairos.db` — SQLite by default, lives at `~/.kairos/kairos.db`.
-- Optional Postgres bridge (off in v0.1; `KAIROS_DB_URL=postgresql://...` activates it).
+- `kairos.db` - SQLite, lives at `<project>/.kairos/kairos.db` by default.
+- Override with `KAIROS_DB_HOME=/some/path` (KAI-018); the file moves to `${KAIROS_DB_HOME}/kairos.db`.
+- Opens with `journal_mode=WAL`, `synchronous=NORMAL`, `busy_timeout=5000` (KAI-022) so concurrent runs don't trample each other.
+- `wiki_index` and `wiki_relations` are populated by `WikiIndexer` (KAI-005) on every ingest / lint / save-to-wiki query; selector + query consume them.
+- `feedback` table receives writes from `kairos feedback <run-id> --rating 1..5 --note "..."` (KAI-035).
+- Postgres support is **deferred to v0.3** (KAI-036). The `[postgres]` extra is gone from `pyproject.toml`.
 
-### Config (`~/.kairos/config.toml`)
+### Config (`<project>/.kairos/config.toml`)
 
 ```toml
-[kairos]
-default_technique = "auto"
-max_react_steps = 6
-runner_timeout_s = 120
+[llm]
+backend = "mcp"             # "stub" or "mcp"
 mcp_url = "http://localhost:8765"
 
 [wiki]
+stale_after_days = 180
 auto_save_query_answers = false
-lint_on_ingest = true
 
-[runners.rag]
-chunk_size = 800
-top_k = 6
+[selector]
+default_technique = "rag"
+require_runner = true
+
+[sources]
+# free-form key/value map; surfaces in `kairos doctor`.
+my_papers = "/Users/me/papers"
 ```
+
+`load_config()` merges in this order: **environment variables** (`KAIROS_*`) > **`.kairos/config.toml`** > **built-in defaults**. `kairos doctor` shows which file (if any) was read and what the resolved values are.
 
 ## On-disk layout (after `kairos init`)
 
@@ -150,7 +210,7 @@ my-project/
     └── kairos.db          <-- per-project state (sqlite)
 ```
 
-The package itself ships a **seed wiki** at `<package>/_seed/` containing the 20 agent-technique concept pages (RAG, ReAct, Reflexion, ToT, etc.). `kairos init` copies the seed wiki into the user's `wiki/` if `wiki/` doesn't exist.
+The package itself ships a **seed wiki** at `<package>/_seed/` containing the 21 agent-technique concept pages (RAG, ReAct, Reflexion, ToT, etc.). `kairos init` copies the seed wiki into the user's `wiki/` if `wiki/` doesn't exist.
 
 ## Data flow (end-to-end query)
 
@@ -182,9 +242,17 @@ sequenceDiagram
 - **Files are the source of truth.** `wiki/` survives database loss; `kairos.db` is purely state, not knowledge.
 - **`AGENTS.md` is sacred.** Both the package and the user's project-local copy follow the same schema; Karpathy's pattern works only if the schema is honored.
 - **Single LLM bridge.** All techniques use the same `llm-mcp` client. New runners do not introduce new auth code paths.
-- **Selector reads, runners write.** The selector touches no LLM session for selection itself in v0.1 (rule-based heuristics over `wiki/index.md` for speed). v0.2 may switch to model-first selection.
+- **Selector reads, runners write.** v0.2 selector stays rule-based by default (deterministic, network-free, fully testable) and only escalates to `claude_send` when `--llm-rerank` is set AND the top candidates are within 0.05 of each other.
 
-> Update Phase 4: pre-implementation review revised the v0.1 selector to **rule-based** heuristics (string-overlap + tag match) so it stays free of model calls and can be tested fully without the network. The model-based variant is parked for v0.2.
+## v0.3+ surfaces
+
+Items deferred until a future release. They are intentionally out of scope for v0.2 and not implemented:
+
+- **Postgres backend.** `[postgres]` extra removed (KAI-036). Will return as a proper bridge once the multi-tenant wiki design lands.
+- **Embedding-based retrieval.** v0.2 RAG is purely lexical. Embeddings will arrive when `llm-mcp` exposes a vector tool.
+- **Webhook publishing.** `kairos publish github|linkedin` is described in some doc copy but not implemented; planned for v0.3.
+- **`kairos lint --fix`.** The flag exists for compatibility; it is a no-op in v0.2.
+- **Model-first selection.** Default stays rule-based for speed and offline use. The optional `--llm-rerank` is the v0.2 compromise.
 
 ## Failure model
 

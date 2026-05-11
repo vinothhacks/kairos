@@ -1,4 +1,4 @@
-"""LLM bridge — talks to a running llm-mcp server.
+"""LLM bridge - talks to a running llm-mcp server.
 
 All ChatGPT and Claude calls fan through this module so the rest of kairos
 never imports any provider SDK directly.

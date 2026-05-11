@@ -10,15 +10,25 @@ in v0.1 we model the client as an abstract interface with two implementations:
 The CLI picks the implementation via `LLMClient.from_env()`:
 - KAIROS_LLM_BACKEND=stub                -> StubLLMClient (loads canned responses from KAIROS_STUB_PATH)
 - KAIROS_LLM_BACKEND=mcp (default)       -> MCPLLMClient
+
+v0.2 changes:
+- KAI-017: MCPLLMClient now retries 5xx + connect errors with exponential backoff.
+- KAI-015: callers can inject a custom httpx transport for integration tests.
+- KAI-026: StubLLMClient default reply no longer echoes the prompt.
 """
 from __future__ import annotations
 
 import json
 import os
+import random
+import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    import httpx
 
 
 class LLMError(RuntimeError):
@@ -78,7 +88,9 @@ class StubLLMClient(LLMClient):
         for k, v in self._canned.items():
             if k.startswith(f"{tool}::") and message[:40] in k:
                 return v
-        return f"[stub:{tool}] {message[:200]}"
+        # KAI-026: do NOT echo the prompt back; callers occasionally pipe replies
+        # straight into render paths and prompt-leakage looks like a real answer.
+        return f"[stub:{tool}] (no canned reply; seed via tests/conftest.py)"
 
     def chatgpt_send(self, message: str, *, conversation_id: str | None = None) -> LLMResult:
         self.calls.append(("chatgpt_send", conversation_id or "pending", message))
@@ -100,11 +112,43 @@ class MCPLLMClient(LLMClient):
     rather than via stdio MCP; the shim is provided by llm-mcp v0.2+ and
     exposes /tools/<name>/call. If the env var is unset and the shim isn't
     reachable, this client raises MCPUnreachable on first use.
+
+    v0.2 (KAI-017) adds bounded retries + exponential backoff for transient
+    failures (5xx, connect errors). 4xx responses are NOT retried: they
+    indicate a permanent client error.
     """
 
-    def __init__(self, base_url: str | None = None, timeout_s: float = 300.0) -> None:
+    DEFAULT_MAX_ATTEMPTS = 3
+    DEFAULT_BACKOFF_BASE = 0.5  # seconds
+
+    def __init__(
+        self,
+        base_url: str | None = None,
+        timeout_s: float = 300.0,
+        *,
+        max_attempts: int = DEFAULT_MAX_ATTEMPTS,
+        backoff_base: float = DEFAULT_BACKOFF_BASE,
+    ) -> None:
         self.base_url = (base_url or os.environ.get("KAIROS_MCP_URL", "http://localhost:8765")).rstrip("/")
         self.timeout_s = timeout_s
+        self.max_attempts = max(1, int(max_attempts))
+        self.backoff_base = max(0.0, float(backoff_base))
+        self._transport: httpx.BaseTransport | None = None  # injected by integration tests
+
+    def ping(self) -> bool:
+        """Best-effort liveness probe used by `kairos doctor`. Returns False on error."""
+        try:
+            self._post("ping", {})
+        except LLMError:
+            return False
+        return True
+
+    def _make_httpx_client(self) -> httpx.Client:
+        import httpx as _httpx
+
+        if self._transport is not None:
+            return _httpx.Client(transport=self._transport, timeout=self.timeout_s)
+        return _httpx.Client(timeout=self.timeout_s)
 
     def _post(self, tool: str, payload: dict[str, Any]) -> dict[str, Any]:
         try:
@@ -112,23 +156,53 @@ class MCPLLMClient(LLMClient):
         except ImportError as e:  # pragma: no cover
             raise LLMError("httpx is required; install kairos-agent[mcp]") from e
         url = f"{self.base_url}/tools/{tool}/call"
-        try:
-            resp = httpx.post(url, json=payload, timeout=self.timeout_s)
-        except httpx.HTTPError as e:
-            raise MCPUnreachable(f"llm-mcp at {self.base_url} is unreachable: {e}") from e
-        if resp.status_code >= 400:
-            raise LLMError(f"llm-mcp returned {resp.status_code}: {resp.text[:300]}")
-        data = resp.json()
-        if not isinstance(data, dict):
-            raise LLMError(f"llm-mcp returned non-dict body: {type(data).__name__}")
-        return data
+        last_err: Exception | None = None
+        for attempt in range(1, self.max_attempts + 1):
+            with self._make_httpx_client() as client:
+                try:
+                    resp = client.post(url, json=payload)
+                except httpx.HTTPError as e:
+                    last_err = e
+                    if attempt >= self.max_attempts:
+                        raise MCPUnreachable(
+                            f"llm-mcp at {self.base_url} is unreachable: {e}"
+                        ) from e
+                    self._sleep(attempt)
+                    continue
+            status = resp.status_code
+            if status >= 500:
+                last_err = LLMError(f"llm-mcp returned {status}: {resp.text[:300]}")
+                if attempt >= self.max_attempts:
+                    raise last_err
+                self._sleep(attempt)
+                continue
+            if status >= 400:
+                # KAI-017: 4xx is permanent, do not retry.
+                raise LLMError(f"llm-mcp returned {status}: {resp.text[:300]}")
+            try:
+                data = resp.json()
+            except json.JSONDecodeError as e:
+                raise LLMError(
+                    f"llm-mcp returned non-JSON body (first 200 chars): {resp.text[:200]!r}"
+                ) from e
+            if not isinstance(data, dict):
+                raise LLMError(f"llm-mcp returned non-dict body: {type(data).__name__}")
+            return data
+        # Defensive: loop should always return or raise above.
+        raise LLMError(f"llm-mcp call failed after {self.max_attempts} attempts: {last_err}")
+
+    def _sleep(self, attempt: int) -> None:
+        delay = self.backoff_base * (2 ** (attempt - 1))
+        # tiny jitter so concurrent clients don't sync up
+        delay += random.uniform(0.0, max(0.05, self.backoff_base / 4))
+        time.sleep(delay)
 
     def chatgpt_send(self, message: str, *, conversation_id: str | None = None) -> LLMResult:
         cid = conversation_id or "pending"
         # llm-mcp expects an existing conversation; create lazily if pending.
         if cid == "pending":
             new = self._post("chatgpt_new_chat", {"title": "kairos"})
-            cid = new.get("conversation_id", "pending")
+            cid = str(new.get("conversation_id", "pending"))
         out = self._post("chatgpt_send", {"conversation_id": cid, "message": message})
         return LLMResult(text=str(out.get("reply", "")), raw=out)
 
@@ -136,7 +210,7 @@ class MCPLLMClient(LLMClient):
         cid = conversation_id or "pending"
         if cid == "pending":
             new = self._post("claude_new_chat", {"title": "kairos"})
-            cid = new.get("conversation_id", "pending")
+            cid = str(new.get("conversation_id", "pending"))
         out = self._post("claude_send", {"conversation_id": cid, "message": message})
         return LLMResult(text=str(out.get("reply", "")), raw=out)
 

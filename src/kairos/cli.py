@@ -1,35 +1,40 @@
-"""kairos CLI — Typer entry point.
+"""kairos CLI - Typer entry point.
 
 Subcommands:
-    init    bootstrap a new kairos project
-    ingest  ingest a source file into the wiki
-    query   ask a question against the wiki
-    lint    health-check the wiki
-    run     pick + execute a technique for a task
-    doctor  print env diagnostics
-    version print the package version
+    init      bootstrap a new kairos project
+    ingest    ingest a source file into the wiki
+    query     ask a question against the wiki
+    lint      health-check the wiki
+    run       pick + execute a technique for a task
+    feedback  rate a previous run (writes to .kairos/kairos.db)
+    doctor    print env diagnostics + probe llm-mcp
+    version   print the package version
 
 Every command is a thin wrapper over a function in src/kairos/wiki/ or
 src/kairos/runners/. The CLI does Rich formatting and error handling only.
 """
 from __future__ import annotations
 
-import os
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import typer
 from rich.console import Console
 from rich.table import Table
 
 from kairos import __version__
-from kairos.llm.mcp_client import LLMClient, MCPUnreachable
+from kairos.llm.mcp_client import LLMClient, LLMError, MCPLLMClient, MCPUnreachable
+from kairos.utils.config import load_config
 from kairos.utils.paths import WikiPaths, resolve_root
 from kairos.wiki.init import init_project
+
+if TYPE_CHECKING:
+    from kairos.selector import TechniqueChoice
 
 app = typer.Typer(
     add_completion=False,
     no_args_is_help=True,
-    help="kairos — Stop guessing. Run the right pattern. A CLI for executable agent knowledge.",
+    help="kairos - Stop guessing. Run the right pattern. A CLI for executable agent knowledge.",
 )
 console = Console()
 
@@ -81,8 +86,16 @@ def ingest(
     except MCPUnreachable as e:
         console.print(f"[red]llm-mcp unreachable[/]: {e}")
         raise typer.Exit(3) from e
+    except LLMError as e:
+        # KAI-009: catch LLMError generically so 5xx / non-JSON / 4xx surface clean.
+        console.print(f"[red]llm error[/]: {e}")
+        raise typer.Exit(3) from e
+    except UnicodeDecodeError as e:
+        # KAI-023: binary or wrong-encoding source files hit a clean error path.
+        console.print(f"[red]error[/]: source file is not valid UTF-8: {e}")
+        raise typer.Exit(2) from e
 
-    console.print(f"[green]ingested[/]: {result.title}")
+    console.print(f"[green]ingested[/]: {result.title}", markup=False)
     table = Table(title=f"writes ({len(result.all_writes)})")
     table.add_column("kind")
     table.add_column("path")
@@ -110,12 +123,16 @@ def query(
     except MCPUnreachable as e:
         console.print(f"[red]llm-mcp unreachable[/]: {e}")
         raise typer.Exit(3) from e
+    except LLMError as e:
+        console.print(f"[red]llm error[/]: {e}")
+        raise typer.Exit(3) from e
 
     console.rule(f"[bold cyan]Q[/]: {question}")
-    console.print(result.answer)
+    # KAI-007: do NOT let Rich interpret [[wikilinks]] / brackets in the LLM reply.
+    console.print(result.answer, markup=False)
     console.rule(f"[dim]read {len(result.pages_read)} page(s)[/]")
     if result.saved_to:
-        console.print(f"[green]saved to wiki[/]: {result.saved_to.relative_to(root)}")
+        console.print(f"[green]saved to wiki[/]: {result.saved_to.relative_to(root)}", markup=True)
 
 
 @app.command()
@@ -133,19 +150,30 @@ def lint(
     except MCPUnreachable as e:
         console.print(f"[red]llm-mcp unreachable[/]: {e}")
         raise typer.Exit(3) from e
+    except LLMError as e:
+        console.print(f"[red]llm error[/]: {e}")
+        raise typer.Exit(3) from e
 
     table = Table(title="lint findings")
     table.add_column("severity")
     table.add_column("kind")
     table.add_column("page")
+    table.add_column("provenance")
     table.add_column("note")
     for f in result.findings:
         sev_color = {"high": "red", "medium": "yellow", "low": "dim"}.get(f.severity, "white")
+        prov = getattr(f, "provenance", "local")
+        prov_label = "[magenta]llm[/]" if prov == "llm" else "[green]local[/]"
+        # KAI-007: f.note may contain [[wikilinks]]; render the cell raw via Text.
+        from rich.text import Text
+
+        note_cell = Text(f.note[:80])
         table.add_row(
             f"[{sev_color}]{f.severity}[/]",
             f.kind,
             f.page,
-            f.note[:80],
+            prov_label,
+            note_cell,
         )
     console.print(table)
     console.print(f"[dim]report: {result.report_path.relative_to(root)}[/]")
@@ -157,6 +185,12 @@ def run(
     project: Path = typer.Option(None, "--project", "-p", help="Project root."),
     technique: str = typer.Option("auto", "--technique", "-t", help="rag | react | reflexion | auto"),
     dry: bool = typer.Option(False, "--dry", help="Return top-3 candidate techniques without running."),
+    json_out: bool = typer.Option(False, "--json", help="Emit the full trace as JSON instead of a table."),
+    llm_rerank: bool = typer.Option(
+        False,
+        "--llm-rerank",
+        help="(KAI-020) When auto-selecting and the top-3 are within 0.05, ask the LLM to break the tie.",
+    ),
 ) -> None:
     """Pick + execute a technique for `task`. Logs the run to .kairos/kairos.db."""
     from kairos.runners import dispatch
@@ -164,6 +198,9 @@ def run(
 
     root = (project or resolve_root()).resolve()
     llm = LLMClient.from_env()
+
+    selected_by = "user"
+    selector_score: float | None = None
 
     try:
         if technique == "auto":
@@ -178,19 +215,131 @@ def run(
                     table.add_row(str(i), choice.technique, f"{choice.score:.2f}", choice.rationale)
                 console.print(table)
                 return
+            if llm_rerank and len(ranking) >= 2:
+                ranking = _llm_rerank_ranking(task=task, ranking=ranking, llm=llm)
             chosen = ranking[0].technique
-            console.print(f"[cyan]selector picked:[/] [bold]{chosen}[/] (score={ranking[0].score:.2f})")
+            selected_by = "selector"
+            selector_score = float(ranking[0].score)
+            console.print(
+                f"[cyan]selector picked:[/] [bold]{chosen}[/] (score={selector_score:.2f})"
+            )
         else:
             chosen = technique
 
-        result = dispatch(chosen, task=task, project_root=root, llm=llm)
+        result = dispatch(
+            chosen,
+            task=task,
+            project_root=root,
+            llm=llm,
+            selected_by=selected_by,
+            selector_score=selector_score,
+        )
     except MCPUnreachable as e:
         console.print(f"[red]llm-mcp unreachable[/]: {e}")
         raise typer.Exit(3) from e
+    except LLMError as e:
+        console.print(f"[red]llm error[/]: {e}")
+        raise typer.Exit(3) from e
+
+    if json_out:
+        import json as _json
+
+        # KAI-034: trace is no longer carried on RunResult; read it back from
+        # disk if a trace_path was produced. Best-effort - if the file is
+        # missing or malformed we ship an empty list rather than crashing.
+        trace_events: list[dict[str, object]] = []
+        if result.trace_path and result.trace_path.exists():
+            for line in result.trace_path.read_text(encoding="utf-8").splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    trace_events.append(_json.loads(line))
+                except _json.JSONDecodeError:
+                    continue
+
+        payload = {
+            "run_id": result.run_id,
+            "technique": result.technique,
+            "task": result.task,
+            "status": result.status,
+            "duration_ms": result.duration_ms,
+            "selected_by": selected_by,
+            "selector_score": selector_score,
+            "answer": result.answer,
+            "answer_path": str(result.answer_path) if result.answer_path else None,
+            "trace_path": str(result.trace_path) if result.trace_path else None,
+            "trace": trace_events,
+            "error": result.error,
+        }
+        console.print(_json.dumps(payload, indent=2), markup=False, highlight=False)
+        return
 
     console.rule(f"[bold cyan]{chosen}[/] -> answer")
-    console.print(result.answer)
-    console.rule(f"[dim]run id={result.run_id}, duration={result.duration_ms}ms[/]")
+    # KAI-007: LLM reply may contain [[wikilinks]]; do not let Rich eat them.
+    console.print(result.answer, markup=False)
+    console.rule(f"[dim]run id={result.run_id}, duration={result.duration_ms:.1f}ms[/]")
+
+
+def _llm_rerank_ranking(
+    *,
+    task: str,
+    ranking: list[TechniqueChoice],
+    llm: LLMClient,
+) -> list[TechniqueChoice]:
+    """KAI-020: optional LLM tie-break for the top-3 candidates.
+
+    Best-effort: on any LLM error we fall back to the original ranking.
+    """
+    if len(ranking) < 2:
+        return ranking
+    top = ranking[0].score
+    close = [r for r in ranking[:3] if abs(r.score - top) < 0.05]
+    if len(close) < 2:
+        return ranking
+    options = "\n".join(
+        f"- {r.technique} (score {r.score:.2f}, rationale: {r.rationale})" for r in close
+    )
+    prompt = (
+        f"You are a tie-break advisor. Pick the BEST technique for this task and "
+        f"reply with ONLY the lowercase technique name.\n\n"
+        f"TASK: {task}\n\nCANDIDATES:\n{options}\n\n"
+        f"Reply with one of: {', '.join(r.technique for r in close)}"
+    )
+    try:
+        reply_text = llm.claude_send(prompt).text.strip().lower()
+    except LLMError:
+        return ranking
+    reply = reply_text.split()[0] if reply_text else ""
+    for r in close:
+        if r.technique == reply:
+            ranking.remove(r)
+            ranking.insert(0, r)
+            return ranking
+    return ranking
+
+
+@app.command()
+def feedback(
+    run_id: int = typer.Argument(..., help="Run id from `kairos run` (see .kairos/kairos.db / outputs/run-NNNNN)."),
+    rating: int = typer.Option(..., "--rating", "-r", help="Quality rating 1-5 (5 = best)."),
+    note: str = typer.Option("", "--note", "-n", help="Optional free-form note."),
+    project: Path = typer.Option(None, "--project", "-p", help="Project root."),
+) -> None:
+    """KAI-035: record feedback for a previous run into the feedback table."""
+    if rating < 1 or rating > 5:
+        console.print("[red]error[/]: --rating must be in 1..5")
+        raise typer.Exit(2)
+
+    from kairos.memory.db import Database
+
+    root = (project or resolve_root()).resolve()
+    paths = WikiPaths(root=root)
+    db = Database(path=paths.db)
+    feedback_id = db.insert_feedback(run_id=run_id, rating=rating, note=note or None)
+    console.print(
+        f"[green]recorded[/]: feedback id={feedback_id} for run {run_id} (rating={rating})"
+    )
 
 
 @app.command()
@@ -198,6 +347,7 @@ def doctor() -> None:
     """Print environment diagnostics: paths, llm-mcp reachability, schema validity."""
     root = resolve_root()
     paths = WikiPaths(root=root)
+    cfg = load_config(root)
     table = Table(title="kairos doctor")
     table.add_column("check")
     table.add_column("status")
@@ -205,9 +355,26 @@ def doctor() -> None:
     table.add_row("project root", "[green]ok[/]" if paths.agents_md.exists() else "[red]missing[/]", str(root))
     table.add_row("AGENTS.md", "[green]ok[/]" if paths.agents_md.exists() else "[red]missing[/]", str(paths.agents_md))
     table.add_row("wiki/", "[green]ok[/]" if paths.wiki.is_dir() else "[red]missing[/]", str(paths.wiki))
-    backend = os.environ.get("KAIROS_LLM_BACKEND", "mcp")
-    mcp_url = os.environ.get("KAIROS_MCP_URL", "http://localhost:8765")
-    table.add_row("llm backend", "[green]ok[/]", f"{backend} ({mcp_url})")
+    table.add_row(
+        ".kairos/config.toml",
+        "[green]ok[/]" if cfg.config_file else "[dim]not present (defaults)[/]",
+        str(cfg.config_file) if cfg.config_file else "(using built-in defaults)",
+    )
+    # KAI-011: real liveness probe instead of a hard-coded 'ok'.
+    backend = cfg.llm_backend
+    mcp_url = cfg.mcp_url
+    if backend == "mcp":
+        try:
+            client = MCPLLMClient(base_url=mcp_url, timeout_s=2.0, backoff_base=0.0, max_attempts=1)
+            reachable = client.ping()
+        except Exception:  # noqa: BLE001
+            reachable = False
+        status = "[green]ok[/]" if reachable else "[yellow]unreachable[/]"
+        detail = f"{backend} ({mcp_url}) {'live' if reachable else 'no response'}"
+    else:
+        status = "[green]ok[/]"
+        detail = f"{backend} (stub backend, no network)"
+    table.add_row("llm backend", status, detail)
     table.add_row("kairos version", "[green]ok[/]", __version__)
     console.print(table)
 

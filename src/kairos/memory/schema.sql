@@ -8,7 +8,7 @@ CREATE TABLE IF NOT EXISTS runs (
     selected_by  TEXT NOT NULL,
     selector_score REAL,
     status       TEXT NOT NULL,
-    duration_ms  INTEGER,
+    duration_ms  REAL,
     cost_tokens  INTEGER,
     answer_path  TEXT,
     trace_path   TEXT,

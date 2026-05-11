@@ -1,6 +1,12 @@
-"""Filesystem path helpers."""
+"""Filesystem path helpers.
+
+v0.2 (KAI-018): when `KAIROS_DB_HOME` is set, the SQLite database path moves to
+that directory (the wiki itself stays under `<project>/`). This matches the
+`docs/architecture.md` claim and lets users keep their state out of the repo.
+"""
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -53,6 +59,11 @@ class WikiPaths:
 
     @property
     def db(self) -> Path:
+        # KAI-018: honor KAIROS_DB_HOME if set, so users can keep .kairos/kairos.db
+        # outside the repo. Default stays <project>/.kairos/kairos.db.
+        override = os.environ.get("KAIROS_DB_HOME", "").strip()
+        if override:
+            return Path(override).expanduser().resolve() / "kairos.db"
         return self.state_dir / "kairos.db"
 
     def ensure_dirs(self) -> None:

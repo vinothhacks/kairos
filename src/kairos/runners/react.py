@@ -1,4 +1,4 @@
-"""ReAct runner — Thought / Action / Observation loop with three tools.
+"""ReAct runner - Thought / Action / Observation loop with three tools.
 
 Tools available to the model:
   - search_web(q)     -> claude_search_web (or chatgpt_search_web if you swap)
@@ -20,7 +20,7 @@ from pathlib import Path
 from textwrap import dedent
 
 from kairos.llm.mcp_client import LLMClient
-from kairos.runners.base import RunRecorder, RunResult
+from kairos.runners.base import Runner, RunRecorder, RunResult
 from kairos.utils.paths import WikiPaths
 
 _ACTION_RE = re.compile(
@@ -45,6 +45,8 @@ def run_react(
     project_root: Path,
     llm: LLMClient,
     max_steps: int = 6,
+    selected_by: str = "user",
+    selector_score: float | None = None,
 ) -> RunResult:
     """Execute a ReAct loop bounded at `max_steps`."""
     paths = WikiPaths(root=project_root)
@@ -87,7 +89,35 @@ def run_react(
     if final_answer is None:
         final_answer = "(react: max steps reached without a final answer)"
 
-    return rec.finish(answer=final_answer, selected_by="user")
+    return rec.finish(answer=final_answer, selected_by=selected_by, selector_score=selector_score)
+
+
+class ReactRunner(Runner):
+    """KAI-006: object form of run_react for plugin discovery + dispatch ABC."""
+
+    name = "react"
+
+    def applicable(self, task: str) -> bool:  # noqa: D401
+        return True
+
+    def run(
+        self,
+        *,
+        task: str,
+        project_root: Path,
+        llm: LLMClient,
+        selected_by: str = "user",
+        selector_score: float | None = None,
+        **kwargs: object,
+    ) -> RunResult:
+        return run_react(
+            task=task,
+            project_root=project_root,
+            llm=llm,
+            selected_by=selected_by,
+            selector_score=selector_score,
+            **kwargs,  # type: ignore[arg-type]
+        )
 
 
 def _build_prompt(*, task: str, history: list[_Step], project_root: Path) -> str:

@@ -3,35 +3,45 @@ from __future__ import annotations
 
 import json
 import time
+from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from kairos.llm.mcp_client import LLMClient
 from kairos.memory.db import Database
 from kairos.utils.paths import WikiPaths
 
 
 @dataclass
 class TraceEvent:
-    """One event in a runner's execution trace."""
+    """One event in a runner's execution trace.
 
-    ts_ms: int
+    KAI-042: ts_ms is a float so we keep sub-millisecond precision in fast
+    runs (the v0.1 int cast lost up to 1ms per event).
+    """
+
+    ts_ms: float
     kind: str
     payload: dict[str, object] = field(default_factory=dict)
 
 
 @dataclass
 class RunResult:
-    """What a runner produces."""
+    """What a runner produces.
+
+    KAI-034: trace lives at `trace_path` on disk, not on this object. Callers
+    that want the full event stream read the JSONL file (or pass
+    `kairos run --json`, which inlines it).
+    """
 
     technique: str
     task: str
     answer: str
     status: str = "ok"
-    duration_ms: int = 0
+    duration_ms: float = 0.0
     run_id: int | None = None
     answer_path: Path | None = None
     trace_path: Path | None = None
-    trace: list[TraceEvent] = field(default_factory=list)
     error: str | None = None
 
 
@@ -46,7 +56,8 @@ class RunRecorder:
         self.events: list[TraceEvent] = []
 
     def event(self, kind: str, **payload: object) -> None:
-        elapsed_ms = int((time.monotonic() - self.start) * 1000)
+        # KAI-042: store true elapsed milliseconds, not coerced int.
+        elapsed_ms = (time.monotonic() - self.start) * 1000.0
         self.events.append(TraceEvent(ts_ms=elapsed_ms, kind=kind, payload=payload))
 
     def finish(
@@ -58,7 +69,7 @@ class RunRecorder:
         selected_by: str = "selector",
         selector_score: float | None = None,
     ) -> RunResult:
-        duration_ms = int((time.monotonic() - self.start) * 1000)
+        duration_ms = (time.monotonic() - self.start) * 1000.0
         db = Database(path=self.paths.db)
         # We need the run id BEFORE writing the trace (to name the folder).
         # SQLite assigns the id on insert; we then create folder and overwrite paths.
@@ -101,6 +112,40 @@ class RunRecorder:
             run_id=run_id,
             answer_path=answer_path,
             trace_path=trace_path,
-            trace=list(self.events),
             error=error,
         )
+
+
+class Runner(ABC):
+    """Abstract base for kairos technique runners (KAI-006).
+
+    Plugins should subclass `Runner`, provide a unique `name`, and register
+    themselves under the `kairos.runners` entry-point group.
+    """
+
+    name: str = ""
+
+    @abstractmethod
+    def applicable(self, task: str) -> bool:
+        """Return True when this runner is plausible for `task`.
+
+        v0.1 implementations should always return True; the rule-based selector
+        does the real ranking. Plugins can use this to opt out of consideration
+        for tasks they cannot handle (e.g. non-English).
+        """
+
+    @abstractmethod
+    def run(
+        self,
+        *,
+        task: str,
+        project_root: Path,
+        llm: LLMClient,
+        selected_by: str = "user",
+        selector_score: float | None = None,
+        **kwargs: object,
+    ) -> RunResult:
+        """Execute the runner. Always returns a RunResult."""
+
+
+__all__ = ["TraceEvent", "RunResult", "RunRecorder", "Runner"]

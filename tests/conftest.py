@@ -12,8 +12,12 @@ from kairos.llm.mcp_client import StubLLMClient
 
 
 @pytest.fixture(autouse=True)
-def _force_stub_backend(monkeypatch: pytest.MonkeyPatch) -> None:
-    """All unit tests use the stub LLM backend by default."""
+def _force_stub_backend(
+    monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest
+) -> None:
+    """Unit tests use the stub LLM backend; integration tests opt out via @pytest.mark.integration."""
+    if "integration" in request.keywords:
+        return
     monkeypatch.setenv("KAIROS_LLM_BACKEND", "stub")
     monkeypatch.delenv("KAIROS_MCP_URL", raising=False)
 

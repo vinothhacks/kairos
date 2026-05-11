@@ -20,7 +20,7 @@ import yaml
 PageType = Literal["concept", "source", "comparison"]
 Confidence = Literal["high", "medium", "low"]
 
-_FRONT_RE = re.compile(r"^---\s*\n(.*?\n)---\s*\n(.*)$", re.DOTALL)
+_FRONT_RE = re.compile(r"^---\s*\n(.*?\n)---\s*(?:\n|$)(.*)$", re.DOTALL)
 _WIKILINK_RE = re.compile(r"\[\[([^\]|#]+?)(?:\|[^\]]+)?\]\]")
 
 
@@ -68,8 +68,8 @@ class PageFrontmatter:
             created=_to_date(raw["created"]),
             updated=_to_date(raw["updated"]),
             confidence=confidence,  # type: ignore[arg-type]
-            sources=[str(s) for s in sources_raw],
-            related=[str(s) for s in related_raw],
+            sources=[_coerce_str(s) for s in sources_raw],
+            related=[_coerce_str(s) for s in related_raw],
             has_runner=bool(raw.get("has_runner", False)),
             extra={
                 k: v
@@ -112,6 +112,18 @@ def _to_date(v: object) -> _dt.date:
     if isinstance(v, _dt.datetime):
         return v.date()
     return _dt.date.fromisoformat(str(v))
+
+
+# KAI-016: YAML 1.1 maps `no`, `off`, `false`, `n` to Python False (and friends to True).
+# When those tokens appear in a string-list field (sources / related) we coerce
+# them back to the lowercase YAML literal so wikilinks like [[no]] don't silently
+# become Python booleans in frontmatter. Quote them in YAML to preserve casing.
+def _coerce_str(value: object) -> str:
+    if value is True:
+        return "yes"
+    if value is False:
+        return "no"
+    return str(value)
 
 
 def parse_page(text: str) -> tuple[PageFrontmatter, str]:

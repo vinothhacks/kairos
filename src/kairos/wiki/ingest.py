@@ -1,4 +1,4 @@
-"""kairos ingest <file> — drop a source into raw/ and let the LLM file it.
+"""kairos ingest <file> - drop a source into raw/ and let the LLM file it.
 
 Karpathy ingest workflow:
   1. Read the source.
@@ -16,6 +16,7 @@ auditable.
 from __future__ import annotations
 
 import datetime as _dt
+import hashlib
 import json
 import re
 import shutil
@@ -25,9 +26,11 @@ from textwrap import dedent
 from typing import Any
 
 from kairos.llm.mcp_client import LLMClient
+from kairos.memory.wiki_index import WikiIndexer
 from kairos.utils.paths import WikiPaths
 from kairos.wiki.schema import (
     PageFrontmatter,
+    extract_wikilinks,
     parse_page,
     render_page,
     validate_schema_loaded,
@@ -86,14 +89,16 @@ def ingest_file(
     slug = slugify(title)
 
     # Move/copy the source into raw/articles unless it's already inside raw/.
+    # KAI-002: when an existing raw copy with the same name is byte-different
+    # from the new source, we write to a numeric-suffixed sibling so the
+    # corpus reflects the latest content (no silent stale copies).
     raw_target = source_file.resolve()
     try:
         raw_target.relative_to(paths.raw.resolve())
     except ValueError:
-        raw_target = paths.raw / "articles" / source_file.name
-        raw_target.parent.mkdir(parents=True, exist_ok=True)
-        if not raw_target.exists():
-            shutil.copy2(source_file, raw_target)
+        candidate = paths.raw / "articles" / source_file.name
+        candidate.parent.mkdir(parents=True, exist_ok=True)
+        raw_target = _resolve_raw_target(candidate, source_file)
 
     raw_rel = raw_target.relative_to(project_root.resolve()).as_posix()
 
@@ -114,21 +119,27 @@ def ingest_file(
     )
 
     reply = llm.claude_send(prompt).text
-    plan = _parse_plan_json(reply, fallback_slug=slug, fallback_title=title, raw_rel=raw_rel)
+    plan = _parse_plan_json(reply, fallback_title=title)
 
     today = _dt.date.today()
 
     # 1. Write the source summary page.
+    # KAI-003: if a different source already owns this slug (different raw_rel),
+    # bump to slug-2.md (counter) so we never silently clobber a peer.
+    # KAI-024: preserve `created` from the prior page if this slug has been
+    # ingested before by the SAME raw_rel.
+    source_path, original_created = _resolve_source_page_path(
+        sources_dir=paths.sources, slug=slug, raw_rel=raw_rel
+    )
     src_fm = PageFrontmatter(
         title=plan["source_page"]["title"],
         type="source",
         sources=[raw_rel],
         related=plan["source_page"].get("related", []),
-        created=today,
+        created=original_created or today,
         updated=today,
         confidence=plan["source_page"].get("confidence", "medium"),
     )
-    source_path = paths.sources / f"{slug}.md"
     source_path.write_text(
         render_page(src_fm, plan["source_page"]["body"]),
         encoding="utf-8",
@@ -172,6 +183,11 @@ def ingest_file(
     # 3. Refresh wiki/index.md (coarse rebuild from disk).
     _rebuild_index(paths)
 
+    # 3b. KAI-005: keep the wiki_index/wiki_relations SQLite cache in sync.
+    _refresh_wiki_index(paths, source_path=source_path, src_fm=src_fm,
+                       src_body=plan["source_page"]["body"], src_slug=source_path.stem,
+                       touched_concepts=created + updated)
+
     # 4. Append wiki/log.md.
     log_entry = f"## [{today.isoformat()}] ingest | {title}\n- source: `{raw_rel}`\n"
     if created:
@@ -190,6 +206,96 @@ def ingest_file(
         log_entry=log_entry.strip(),
         title=title,
     )
+
+
+def _hash_file(path: Path) -> str:
+    h = hashlib.sha256()
+    with path.open("rb") as f:
+        for chunk in iter(lambda: f.read(65536), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _resolve_raw_target(candidate: Path, source_file: Path) -> Path:
+    """Pick a raw/ destination for `source_file`, copying when needed (KAI-002).
+
+    - If candidate does not exist: copy and use it.
+    - If candidate exists with identical bytes: reuse without copy.
+    - If candidate exists with different bytes: walk numeric suffixes
+      (`name_2.md`, `name_3.md`, ...) until we find a matching/empty slot.
+    """
+    if not candidate.exists():
+        shutil.copy2(source_file, candidate)
+        return candidate
+    src_hash = _hash_file(source_file)
+    if _hash_file(candidate) == src_hash:
+        return candidate
+    stem = candidate.stem
+    suffix = candidate.suffix
+    counter = 2
+    while True:
+        alt = candidate.with_name(f"{stem}_{counter}{suffix}")
+        if not alt.exists():
+            shutil.copy2(source_file, alt)
+            return alt
+        if _hash_file(alt) == src_hash:
+            return alt
+        counter += 1
+
+
+def _resolve_source_page_path(
+    *, sources_dir: Path, slug: str, raw_rel: str
+) -> tuple[Path, _dt.date | None]:
+    """Pick a wiki/sources/<slug>.md path that won't clobber a peer (KAI-003).
+
+    Returns the path and (when re-ingesting the same raw_rel) the original
+    `created` date so we can preserve it (KAI-024).
+    """
+    candidate = sources_dir / f"{slug}.md"
+    counter = 1
+    while candidate.exists():
+        try:
+            fm, _ = parse_page(candidate.read_text(encoding="utf-8"))
+        except Exception:  # noqa: BLE001
+            break
+        if raw_rel in fm.sources:
+            return candidate, fm.created
+        counter += 1
+        candidate = sources_dir / f"{slug}-{counter}.md"
+    return candidate, None
+
+
+def _refresh_wiki_index(
+    paths: WikiPaths,
+    *,
+    source_path: Path,
+    src_fm: PageFrontmatter,
+    src_body: str,
+    src_slug: str,
+    touched_concepts: list[Path],
+) -> None:
+    """Mirror page metadata + wikilinks into the wiki_index/wiki_relations tables."""
+    indexer = WikiIndexer(db_path=paths.db)
+    src_rel = source_path.relative_to(paths.root).as_posix()
+    indexer.upsert_page(slug=src_slug, fm=src_fm, body=src_body, file_rel=src_rel)
+    indexer.upsert_relations(
+        from_slug=src_slug,
+        links=extract_wikilinks(src_body),
+        related=src_fm.related,
+    )
+    for concept_path in touched_concepts:
+        try:
+            fm, body = parse_page(concept_path.read_text(encoding="utf-8"))
+        except Exception:  # noqa: BLE001
+            continue
+        rel = concept_path.relative_to(paths.root).as_posix()
+        slug = concept_path.stem
+        indexer.upsert_page(slug=slug, fm=fm, body=body, file_rel=rel)
+        indexer.upsert_relations(
+            from_slug=slug,
+            links=extract_wikilinks(body),
+            related=fm.related,
+        )
 
 
 def _build_prompt(
@@ -256,9 +362,7 @@ def _build_prompt(
 def _parse_plan_json(
     reply: str,
     *,
-    fallback_slug: str,
     fallback_title: str,
-    raw_rel: str,
 ) -> dict[str, Any]:
     """Extract a JSON object from the LLM reply, falling back to a minimal stub."""
     cleaned = reply.strip()

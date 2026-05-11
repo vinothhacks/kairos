@@ -1,4 +1,4 @@
-"""RAG runner — retrieval augmented generation over a folder.
+"""RAG runner - retrieval augmented generation over a folder.
 
 v0.1 retrieval is lexical:
   - chunk every .md file under raw/ at ~chunk_size lines
@@ -10,17 +10,22 @@ This stays purely local-friendly; no embeddings required.
 from __future__ import annotations
 
 import re
+import sys
 from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 from textwrap import dedent
 
 from kairos.llm.mcp_client import LLMClient
-from kairos.runners.base import RunRecorder, RunResult
+from kairos.runners.base import Runner, RunRecorder, RunResult
 from kairos.utils.paths import WikiPaths
 
 _WORD_RE = re.compile(r"[a-z0-9][a-z0-9-]+")
 _STOPWORDS = frozenset({"the", "a", "an", "and", "or", "of", "is", "to", "for", "in", "on", "with", "by"})
+
+# KAI-044: skip pathological inputs so a single 50MB markdown dump can't OOM
+# the runner. 5MB matches the audit recommendation.
+_MAX_RAG_FILE_BYTES = 5 * 1024 * 1024
 
 
 @dataclass
@@ -39,6 +44,8 @@ def run_rag(
     source_folder: Path | None = None,
     chunk_size: int = 30,
     top_k: int = 6,
+    selected_by: str = "user",
+    selector_score: float | None = None,
 ) -> RunResult:
     """Answer `task` using retrieval over markdown files in `source_folder` (defaults to raw/)."""
     paths = WikiPaths(root=project_root)
@@ -90,13 +97,57 @@ def run_rag(
     answer = llm.chatgpt_send(prompt).text.strip()
     rec.event("llm_done", reply_chars=len(answer))
 
-    return rec.finish(answer=answer or "(empty answer)", selected_by="user", selector_score=None)
+    return rec.finish(
+        answer=answer or "(empty answer)",
+        selected_by=selected_by,
+        selector_score=selector_score,
+    )
+
+
+class RagRunner(Runner):
+    """KAI-006: object form of run_rag for plugin discovery + dispatch ABC."""
+
+    name = "rag"
+
+    def applicable(self, task: str) -> bool:  # noqa: D401
+        return True
+
+    def run(
+        self,
+        *,
+        task: str,
+        project_root: Path,
+        llm: LLMClient,
+        selected_by: str = "user",
+        selector_score: float | None = None,
+        **kwargs: object,
+    ) -> RunResult:
+        return run_rag(
+            task=task,
+            project_root=project_root,
+            llm=llm,
+            selected_by=selected_by,
+            selector_score=selector_score,
+            **kwargs,  # type: ignore[arg-type]
+        )
 
 
 def _chunk_folder(folder: Path, *, chunk_size: int) -> Iterable[_Chunk]:
     if not folder.exists():
         return
     for path in folder.rglob("*.md"):
+        try:
+            size = path.stat().st_size
+        except OSError:
+            continue
+        if size > _MAX_RAG_FILE_BYTES:
+            # KAI-044: skip oversize files but tell the user, otherwise the
+            # missing chunks look like a relevance bug.
+            print(
+                f"[rag] skipping {path.name} ({size / (1024 * 1024):.1f}MB > 5MB cap)",
+                file=sys.stderr,
+            )
+            continue
         try:
             text = path.read_text(encoding="utf-8")
         except OSError:

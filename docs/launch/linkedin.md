@@ -42,7 +42,7 @@ What's interesting:
 
 3) The selector is rule-based, not LLM-based. Deterministic, offline-testable, and you can read the decision in the trace log. No "the LLM picks the LLM" infinite recursion.
 
-v0.1 ships with 3 working runners (RAG, ReAct, Reflexion), 20 seed concept pages, 48 unit tests, 5 e2e scripts, and one-line install via uv, pipx, or pip.
+v0.1 ships with 3 working runners (RAG, ReAct, Reflexion), 21 seed concept pages, 48 unit tests, 5 e2e scripts, and one-line install via uv, pipx, or pip.
 
 If you've ever stared at LangChain's runnable hierarchy and wondered "is this the right pattern for my problem?", that's the question kairos answers.
 

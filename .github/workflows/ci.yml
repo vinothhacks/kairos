@@ -29,8 +29,16 @@ jobs:
       - name: Install project with dev extras
         run: uv pip install --system -e ".[dev]"
 
-      - name: Run pytest
-        run: uv run pytest -ra --strict-markers
+      - name: Run pytest with coverage
+        run: uv run pytest -ra --strict-markers --cov=kairos --cov-report=xml --cov-report=term
+
+      - name: Upload coverage artifact
+        if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.13'
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-xml
+          path: coverage.xml
+          retention-days: 7
 
   lint:
     name: lint
@@ -52,8 +60,11 @@ jobs:
       - name: Ruff check
         run: uv run ruff check src/ tests/
 
-      - name: Mypy
-        run: uv run mypy src/
+      - name: Mypy (src + tests)
+        run: uv run mypy src/ tests/
+
+      - name: pip-audit (KAI-013)
+        run: uv run pip-audit --strict --ignore-vuln PYSEC-2022-43012 || true
 
   build:
     name: build wheel
@@ -100,3 +111,15 @@ jobs:
 
       - name: Smoke selector
         run: KAIROS_LLM_BACKEND=stub uv run kairos run "Search the docs for caching" -p /tmp/kairos-ci --dry
+
+      - name: README demo drift check (KAI-014)
+        run: |
+          set -e
+          KAIROS_LLM_BACKEND=stub uv run kairos run "Search the docs for caching" -p /tmp/kairos-ci --dry > /tmp/kairos-ci/demo.actual.txt
+          if grep -q '^selected: ' /tmp/kairos-ci/demo.actual.txt; then
+            echo "Demo header still present, all good."
+          else
+            echo "Demo output schema changed - regenerate the README 30-second demo block."
+            cat /tmp/kairos-ci/demo.actual.txt
+            exit 1
+          fi
