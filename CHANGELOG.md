@@ -2,6 +2,21 @@
 
 All notable changes to `kairos` are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.1] - 2026-05-11
+
+The install hotfix. Both `install.ps1` and `install.sh` have been calling `uv tool install kairos-agent` since v0.1.0, but **the package was never published to PyPI** — every one-liner install attempt has been failing with `× No solution found when resolving dependencies` for every user since day one. v0.2.1 publishes the package to PyPI via GitHub Actions Trusted Publishing (OIDC, no token in repo) and ships a tag-triggered `release.yml` so this can never recur.
+
+The good news: `install.ps1` does not pin a version, so as soon as v0.2.1 lands on PyPI, the original v0.1.0 / v0.1.1 / v0.2.0 install one-liners ALSO start working — the fix is retroactive. No other code changes; v0.2.0 -> v0.2.1 is a publishing-only bump.
+
+### Added
+- **PyPI Trusted Publishing workflow** ([`.github/workflows/release.yml`](.github/workflows/release.yml)). Tag push of `v*.*.*` triggers a green test+lint matrix gate (the v0.2 lesson, encoded in code) followed by `pypa/gh-action-pypi-publish` via OIDC. The publish job is `needs: [test, lint]`, so a red commit cannot ship. Also attaches the wheel + sdist to the GitHub Release.
+
+### Fixed
+- **Install one-liner now works** (no v2 finding ID; surfaced by an external user reporting `× No solution found when resolving dependencies: Because kairos-agent was not found in the package registry`). v0.2.1 is the first kairos release that exists on PyPI. `irm https://raw.githubusercontent.com/vinothhacks/kairos/v0.2.1/install.ps1 | iex` and the sh equivalent now succeed.
+
+### What is NOT in this release
+- The 30 v2 audit findings ([`issues/ISSUES 2 kairos/`](https://github.com/vinothhacks/kairos)) are deliberately out of scope. They are scheduled for **v0.3.0** as a dedicated audit-fix release, mirroring the v0.2 phased plan. v0.2.1 ships today so anyone hitting the broken install link is unblocked immediately.
+
 ## [0.2.0] - 2026-05-11
 
 The audit-fix release. We ran a full internal audit of v0.1.1 against the README, architecture doc, and runtime behavior, opened 45 findings, and closed every single one. v0.2.0 also implements seven features that v0.1 documented but didn't actually deliver. **Zero breaking changes.** See [`docs/UPGRADING.md`](docs/UPGRADING.md) for the migration walkthrough.
@@ -99,6 +114,7 @@ The first release. The minimum surface that proves the wedge: an LLM Wiki that p
 - The `--fix` flag on `lint` is a v0.2 placeholder; v0.1 is report-only.
 - Postgres backend is optional and off by default; v0.1 is SQLite-only in practice.
 
+[0.2.1]: https://github.com/vinothhacks/kairos/releases/tag/v0.2.1
 [0.2.0]: https://github.com/vinothhacks/kairos/releases/tag/v0.2.0
 [0.1.1]: https://github.com/vinothhacks/kairos/releases/tag/v0.1.1
 [0.1.0]: https://github.com/vinothhacks/kairos/releases/tag/v0.1.0
