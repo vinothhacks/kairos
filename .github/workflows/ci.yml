@@ -103,8 +103,13 @@ jobs:
         run: |
           set -e
           KAIROS_LLM_BACKEND=stub uv run kairos run "Search the docs for caching" -p /tmp/kairos-ci --dry > /tmp/kairos-ci/demo.actual.txt
-          if grep -qE 'top-3 techniques for:' /tmp/kairos-ci/demo.actual.txt && grep -qE '^\| 1 +\| (rag|react|reflexion) ' /tmp/kairos-ci/demo.actual.txt; then
-            echo "Demo header + rank table present; schema unchanged."
+          ok=1
+          grep -q 'top-3 techniques for:' /tmp/kairos-ci/demo.actual.txt || ok=0
+          grep -q ' rag '       /tmp/kairos-ci/demo.actual.txt || ok=0
+          grep -q ' react '     /tmp/kairos-ci/demo.actual.txt || ok=0
+          grep -q ' reflexion ' /tmp/kairos-ci/demo.actual.txt || ok=0
+          if [ "$ok" = "1" ]; then
+            echo "Demo header + 3 rank techniques present; schema unchanged."
           else
             echo "Demo output schema changed - regenerate the README 30-second demo block."
             cat /tmp/kairos-ci/demo.actual.txt
