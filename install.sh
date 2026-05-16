@@ -3,7 +3,8 @@
 # otherwise `pipx install`, otherwise `pip install --user`.
 set -eu
 
-PKG="kairos-agent"
+VERSION="${KAIROS_VERSION:-0.3.0}"
+PKG="kairos-agent==$VERSION"
 BIN="kairos"
 GREEN='\033[0;32m'
 CYAN='\033[0;36m'

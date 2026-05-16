@@ -162,9 +162,9 @@ flowchart TB
 ### Memory layer (`src/kairos/memory/`)
 
 - `kairos.db` - SQLite, lives at `<project>/.kairos/kairos.db` by default.
-- Override with `KAIROS_DB_HOME=/some/path` (KAI-018); the file moves to `${KAIROS_DB_HOME}/kairos.db`.
+- Override with `KAIROS_DB_HOME=/some/path` (KAI-018); v0.3 namespaces the file under a short project hash at `${KAIROS_DB_HOME}/<project_hash>/kairos.db` so shared homes do not mix unrelated projects.
 - Opens with `journal_mode=WAL`, `synchronous=NORMAL`, `busy_timeout=5000` (KAI-022) so concurrent runs don't trample each other.
-- `wiki_index` and `wiki_relations` are populated by `WikiIndexer` (KAI-005) on every ingest / lint / save-to-wiki query; selector + query consume them.
+- `wiki_index` and `wiki_relations` are populated by `WikiIndexer` (KAI-005) on init, ingest, lint, and save-to-wiki query; selector + query consume them.
 - `feedback` table receives writes from `kairos feedback <run-id> --rating 1..5 --note "..."` (KAI-035).
 - Postgres support is **deferred to v0.3** (KAI-036). The `[postgres]` extra is gone from `pyproject.toml`.
 

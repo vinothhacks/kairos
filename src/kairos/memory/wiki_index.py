@@ -24,6 +24,15 @@ _WORD_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9-]+")
 _WIKILINK_TARGET_RE = re.compile(r"^\[\[([^\]|#]+?)(?:\|[^\]]+)?\]\]$")
 
 
+def normalize_wikilink(value: str) -> str:
+    """Strip [[ ]] wrappers, aliases, and anchors from a wikilink target."""
+    s = value.strip()
+    m = _WIKILINK_TARGET_RE.match(s)
+    if m:
+        return m.group(1).split("#", 1)[0].strip()
+    return s.strip("[]").split("|", 1)[0].split("#", 1)[0].strip()
+
+
 @dataclass
 class WikiIndexer:
     """Tiny façade for the wiki_index + wiki_relations tables."""
@@ -41,11 +50,7 @@ class WikiIndexer:
     @staticmethod
     def _normalize_link(value: str) -> str:
         """Strip [[ ]] wrappers and aliases from a link target."""
-        s = value.strip()
-        m = _WIKILINK_TARGET_RE.match(s)
-        if m:
-            return m.group(1).strip()
-        return s.strip("[]").split("|", 1)[0].strip()
+        return normalize_wikilink(value)
 
     def upsert_page(
         self, *, slug: str, fm: PageFrontmatter, body: str, file_rel: str
@@ -94,7 +99,7 @@ class WikiIndexer:
         link_targets = [self._normalize_link(s) for s in links if s]
         related_targets = [self._normalize_link(s) for s in related if s]
         with sqlite3.connect(self.db_path) as c:
-            c.execute("PRAGMA foreign_keys = OFF;")  # we may insert before target slug exists
+            c.execute("PRAGMA foreign_keys = ON;")
             c.execute("DELETE FROM wiki_relations WHERE from_slug=?", (from_slug,))
             for target in link_targets:
                 if not target:
@@ -135,4 +140,4 @@ class WikiIndexer:
             return [dict(r) for r in cur.fetchall()]
 
 
-__all__ = ["WikiIndexer"]
+__all__ = ["WikiIndexer", "normalize_wikilink"]

@@ -52,12 +52,12 @@ class RunRecorder:
         self.paths = WikiPaths(root=project_root)
         self.technique = technique
         self.task = task
-        self.start = time.monotonic()
+        self.start = time.perf_counter()
         self.events: list[TraceEvent] = []
 
     def event(self, kind: str, **payload: object) -> None:
         # KAI-042: store true elapsed milliseconds, not coerced int.
-        elapsed_ms = (time.monotonic() - self.start) * 1000.0
+        elapsed_ms = (time.perf_counter() - self.start) * 1000.0
         self.events.append(TraceEvent(ts_ms=elapsed_ms, kind=kind, payload=payload))
 
     def finish(
@@ -69,7 +69,7 @@ class RunRecorder:
         selected_by: str = "selector",
         selector_score: float | None = None,
     ) -> RunResult:
-        duration_ms = (time.monotonic() - self.start) * 1000.0
+        duration_ms = (time.perf_counter() - self.start) * 1000.0
         db = Database(path=self.paths.db)
         # We need the run id BEFORE writing the trace (to name the folder).
         # SQLite assigns the id on insert; we then create folder and overwrite paths.

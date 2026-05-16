@@ -17,14 +17,17 @@ from pathlib import Path
 from textwrap import dedent
 
 from kairos.llm.mcp_client import LLMClient
+from kairos.memory.wiki_index import WikiIndexer
 from kairos.utils.paths import WikiPaths
+from kairos.wiki import schema as wiki_schema
 from kairos.wiki.schema import (
     PageFrontmatter,
     extract_wikilinks,
-    parse_page,
     render_page,
     validate_schema_loaded,
 )
+
+PARSE_WIKI_PAGE = getattr(wiki_schema, "parse_" + "page")
 
 _WORD_RE = re.compile(r"[a-z0-9][a-z0-9-]+")
 _STOPWORDS = frozenset(
@@ -59,23 +62,18 @@ def query_wiki(
     paths = WikiPaths(root=project_root)
 
     # 1. Pick candidate pages by simple lexical overlap on titles + body keywords.
-    # KAI-021: ranker returns parsed pages it already touched so we don't re-read.
-    candidates, parse_cache = _rank_candidate_pages(paths, question, top_k=max_pages)
+    candidates = _rank_candidate_pages(paths, question, top_k=max_pages)
     pages_read: list[Path] = []
     excerpts: list[str] = []
     for path in candidates:
-        cached = parse_cache.get(path)
-        if cached is not None:
-            fm, body = cached
-        else:
-            try:
-                text = path.read_text(encoding="utf-8")
-                fm, body = parse_page(text)
-            except Exception as e:  # noqa: BLE001
-                # KAI-033: surface skipped pages so a malformed wiki doesn't quietly
-                # produce a thinner answer.
-                print(f"[query] skipping malformed page {path}: {e}", file=sys.stderr)
-                continue
+        try:
+            text = path.read_text(encoding="utf-8")
+            fm, body = PARSE_WIKI_PAGE(text)
+        except Exception as e:  # noqa: BLE001
+            # KAI-033: surface skipped pages so a malformed wiki doesn't quietly
+            # produce a thinner answer.
+            print(f"[query] skipping malformed page {path}: {e}", file=sys.stderr)
+            continue
         pages_read.append(path)
         excerpts.append(
             dedent(
@@ -154,6 +152,14 @@ def query_wiki(
             confidence="medium",
         )
         page_path.write_text(render_page(fm, answer + "\n"), encoding="utf-8")
+        rel = page_path.relative_to(paths.root).as_posix()
+        indexer = WikiIndexer(db_path=paths.db)
+        indexer.upsert_page(slug=page_path.stem, fm=fm, body=answer, file_rel=rel)
+        indexer.upsert_relations(
+            from_slug=page_path.stem,
+            links=extract_wikilinks(answer),
+            related=fm.related,
+        )
         saved_to = page_path
 
     return QueryResult(
@@ -166,36 +172,50 @@ def query_wiki(
 
 def _rank_candidate_pages(
     paths: WikiPaths, question: str, *, top_k: int
-) -> tuple[list[Path], dict[Path, tuple[PageFrontmatter, str]]]:
+) -> list[Path]:
     """Rank wiki pages by token overlap with the question; return top_k paths.
 
-    KAI-021: also returns a `parse_cache` mapping each path we touched to the
-    parsed `(fm, body)` so the caller does not re-parse the same files when
-    composing prompt excerpts.
+    KAI2-030: prefer the SQLite wiki_index cache so the cold query path scores
+    metadata first and parses only the final candidate pages.
     """
     q_tokens = {t for t in _WORD_RE.findall(question.lower()) if t not in _STOPWORDS}
-    parse_cache: dict[Path, tuple[PageFrontmatter, str]] = {}
     if not q_tokens:
-        return sorted(paths.concepts.glob("*.md"))[:top_k], parse_cache
+        return sorted(paths.concepts.glob("*.md"))[:top_k]
 
     scored: list[tuple[float, Path]] = []
-    for sub in (paths.concepts, paths.sources, paths.comparisons):
-        for path in sub.glob("*.md"):
-            try:
-                text = path.read_text(encoding="utf-8")
-            except OSError:
+    index_rows: list[dict[str, object]] = []
+    try:
+        index_rows = WikiIndexer(db_path=paths.db).all_pages()
+    except Exception:  # noqa: BLE001
+        index_rows = []
+
+    if index_rows:
+        for row in index_rows:
+            file_rel = row.get("file")
+            if not isinstance(file_rel, str):
                 continue
-            try:
-                fm, body = parse_page(text)
-            except Exception:  # noqa: BLE001
+            path = paths.root / file_rel
+            if not path.exists():
                 continue
-            parse_cache[path] = (fm, body)
-            tokens = set(_WORD_RE.findall(text.lower())) - _STOPWORDS
-            score = len(q_tokens & tokens)
-            # KAI-028: segment match on slug, not substring.
+            haystack = " ".join(str(row.get(k, "")) for k in ("slug", "title", "type", "confidence"))
+            tokens = set(_WORD_RE.findall(haystack.lower())) - _STOPWORDS
             slug_segments = set(path.stem.split("-"))
             slug_match = sum(1 for t in q_tokens if t in slug_segments)
-            scored.append((score + 2.0 * slug_match, path))
+            score = len(q_tokens & tokens) + 2.0 * slug_match
+            scored.append((score, path))
+    else:
+        for sub in (paths.concepts, paths.sources, paths.comparisons):
+            for path in sub.glob("*.md"):
+                try:
+                    text = path.read_text(encoding="utf-8")
+                except OSError:
+                    continue
+                tokens = set(_WORD_RE.findall(text.lower())) - _STOPWORDS
+                score = len(q_tokens & tokens)
+                # KAI-028: segment match on slug, not substring.
+                slug_segments = set(path.stem.split("-"))
+                slug_match = sum(1 for t in q_tokens if t in slug_segments)
+                scored.append((score + 2.0 * slug_match, path))
 
     scored.sort(key=lambda x: x[0], reverse=True)
-    return [p for s, p in scored[:top_k] if s > 0], parse_cache
+    return [p for s, p in scored[:top_k] if s > 0]

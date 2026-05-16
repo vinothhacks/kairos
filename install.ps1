@@ -1,8 +1,9 @@
 # kairos installer (Windows PowerShell). Idempotent.
 # Prefers `uv tool install`, then `pipx install`, then `pip install --user`.
-$ErrorActionPreference = 'Stop'
+param([string]$Version = '0.3.0')
 
-$Pkg = 'kairos-agent'
+$PkgName = 'kairos-agent'
+$Pkg = "kairos-agent==$Version"
 $Bin = 'kairos'
 
 function Write-Hi   { param($m) Write-Host "-> $m" -ForegroundColor Cyan }
@@ -14,14 +15,14 @@ Write-Hi "kairos installer - picks the right Python tool for you"
 $installer = $null
 if (Get-Command uv -ErrorAction SilentlyContinue) {
     Write-Hi 'found uv, installing as a uv tool'
-    & uv tool install $Pkg
+    & uv tool install $Pkg 2>&1 | ForEach-Object { Write-Host $_ }
     if ($LASTEXITCODE -ne 0) { Write-Err 'uv tool install failed' }
     Write-Ok 'installed via uv'
     $installer = 'uv'
 }
 elseif (Get-Command pipx -ErrorAction SilentlyContinue) {
     Write-Hi 'found pipx, installing as an isolated app'
-    & pipx install $Pkg
+    & pipx install $Pkg 2>&1 | ForEach-Object { Write-Host $_ }
     if ($LASTEXITCODE -ne 0) { Write-Err 'pipx install failed' }
     Write-Ok 'installed via pipx'
     $installer = 'pipx'
@@ -29,13 +30,13 @@ elseif (Get-Command pipx -ErrorAction SilentlyContinue) {
 elseif ((Get-Command pip -ErrorAction SilentlyContinue) -or (Get-Command pip3 -ErrorAction SilentlyContinue)) {
     $pip = if (Get-Command pip3 -ErrorAction SilentlyContinue) { 'pip3' } else { 'pip' }
     Write-Hi "no uv or pipx, falling back to $pip --user"
-    & $pip install --user --upgrade $Pkg
+    & $pip install --user --upgrade $Pkg 2>&1 | ForEach-Object { Write-Host $_ }
     if ($LASTEXITCODE -ne 0) { Write-Err 'pip install failed' }
     Write-Ok 'installed via pip --user'
     $installer = $pip
 }
 else {
-    Write-Err 'no Python package manager found. Install uv (https://docs.astral.sh/uv/) or pipx and re-run.'
+    Write-Err "no Python package manager found. Install uv (https://docs.astral.sh/uv/) or pipx and re-run. Package: $PkgName"
 }
 
 if (Get-Command $Bin -ErrorAction SilentlyContinue) {

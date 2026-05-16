@@ -26,6 +26,7 @@ from textwrap import dedent
 from typing import Literal
 
 from kairos.llm.mcp_client import LLMClient
+from kairos.memory.wiki_index import WikiIndexer, normalize_wikilink
 from kairos.utils.paths import WikiPaths
 from kairos.wiki.schema import (
     PageFrontmatter,
@@ -76,6 +77,7 @@ def lint_wiki(
     pages, outgoing_links, incoming_links, parse_findings = _collect_pages_and_links(
         paths=paths, project_root=project_root
     )
+    _refresh_index_from_lint(paths=paths, pages=pages, outgoing_links=outgoing_links)
     today = _dt.date.today()
     local = parse_findings + _local_findings(
         pages=pages,
@@ -104,6 +106,27 @@ def lint_wiki(
         report_path=report_path,
         pages_scanned=len(pages) + len(parse_findings),
     )
+
+
+def _refresh_index_from_lint(
+    *,
+    paths: WikiPaths,
+    pages: dict[str, tuple[Path, PageFrontmatter, str]],
+    outgoing_links: dict[str, set[str]],
+) -> None:
+    """Mirror lint's parsed pages into wiki_index and prune deleted rows."""
+    indexer = WikiIndexer(db_path=paths.db)
+    seen: set[str] = set()
+    for slug, (path, fm, body) in pages.items():
+        seen.add(slug)
+        rel = path.relative_to(paths.root).as_posix()
+        indexer.upsert_page(slug=slug, fm=fm, body=body, file_rel=rel)
+        indexer.upsert_relations(from_slug=slug, links=outgoing_links.get(slug, ()), related=fm.related)
+    for row in indexer.all_pages():
+        slug = str(row.get("slug", ""))
+        file_rel = row.get("file")
+        if slug and (slug not in seen or not isinstance(file_rel, str) or not (paths.root / file_rel).exists()):
+            indexer.remove_page(slug)
 
 
 def _collect_pages_and_links(
@@ -260,14 +283,11 @@ def _llm_findings(
 
 
 def _strip_link(s: str) -> str:
-    s = s.strip()
-    if s.startswith("[[") and s.endswith("]]"):
-        return s[2:-2].strip()
-    return s
+    return normalize_wikilink(s)
 
 
 _FINDING_RE = re.compile(
-    r"^[-*]\s*\[(?P<sev>high|medium|low)\]\s*(?P<kind>[\w-]+)\s*\|\s*(?P<page>[^|]+)\s*\|\s*(?P<note>.+)$",
+    r"^[-*]\s*\[(?P<sev>high|medium|low)\]\s*(?P<kind>[\w-]+(?:\s+[\w-]+)*)\s*\|\s*(?P<page>[^|]+)\s*\|\s*(?P<note>.+)$",
     re.IGNORECASE,
 )
 

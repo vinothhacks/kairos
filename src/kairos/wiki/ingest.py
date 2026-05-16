@@ -20,6 +20,7 @@ import hashlib
 import json
 import re
 import shutil
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from textwrap import dedent
@@ -284,10 +285,14 @@ def _refresh_wiki_index(
         related=src_fm.related,
     )
     for concept_path in touched_concepts:
+        parsed = None
         try:
-            fm, body = parse_page(concept_path.read_text(encoding="utf-8"))
-        except Exception:  # noqa: BLE001
+            parsed = parse_page(concept_path.read_text(encoding="utf-8"))
+        except Exception as exc:  # noqa: BLE001
+            print(f"[ingest] skipped indexing malformed page {concept_path}: {exc}", file=sys.stderr)
+        if parsed is None:
             continue
+        fm, body = parsed
         rel = concept_path.relative_to(paths.root).as_posix()
         slug = concept_path.stem
         indexer.upsert_page(slug=slug, fm=fm, body=body, file_rel=rel)

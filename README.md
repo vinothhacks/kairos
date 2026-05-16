@@ -10,26 +10,25 @@
     <a href="https://github.com/vinothhacks/kairos/actions"><img alt="CI" src="https://github.com/vinothhacks/kairos/workflows/ci/badge.svg"></a>
   </p>
   <p>
-    <a href="#install">Install</a> · <a href="#30-second-demo">Demo</a> · <a href="#whats-new-in-v02">What's new in v0.2</a> · <a href="#why-kairos">Why kairos</a> · <a href="#quickstart">Quickstart</a> · <a href="#how-it-works">How it works</a> · <a href="#commands">Commands</a> · <a href="#roadmap">Roadmap</a>
+    <a href="#install">Install</a> · <a href="#30-second-demo">Demo</a> · <a href="#whats-new-in-v03">What's new in v0.3</a> · <a href="#why-kairos">Why kairos</a> · <a href="#quickstart">Quickstart</a> · <a href="#how-it-works">How it works</a> · <a href="#commands">Commands</a> · <a href="#roadmap">Roadmap</a>
   </p>
 </div>
 
 ---
 
-## What's new in v0.2
+## What's new in v0.3
 
-**v0.2.0 closes 45 audit findings** we found by auditing our own v0.1.1. Highlights:
+**v0.3.0 closes the v3 audit scope: 5 KAI3 supply-chain/install findings plus 30 KAI2 carryovers.** Highlights:
 
-- **`.kairos/config.toml`** parser - tune backend, stale window, default technique without env vars.
-- **Plugin runners** via `entry_points(group="kairos.runners")` - `pip install kairos-runner-tot` lands without a fork.
-- **Real `wiki_index` cache** - selector + query stop re-walking the filesystem on every call.
-- **`kairos doctor`** now actually pings `llm-mcp` instead of hard-coding "ok".
-- **`kairos feedback <run-id> --rating N`** - capture quality signal for the runs you care about.
-- **Retries + backoff** in `MCPLLMClient` - 3 attempts with exponential backoff on 5xx + connect errors.
-- **`KAIROS_DB_HOME`** env var - relocate `kairos.db` outside the repo.
-- **`kairos run --json`** + **`--llm-rerank`** - structured output and an optional LLM tie-break.
+- **Hardened release pipeline** - SHA-pinned actions, job-scoped publish permissions, and tag/version verification before PyPI publish.
+- **Pinned installers** - one-liners default to `kairos-agent==0.3.0` with explicit override hooks.
+- **Clean JSON output** - `kairos run --json` and `--json --dry` emit parseable JSON only.
+- **Immediate wiki index** - `kairos init` seeds `wiki_index` so selector/query do not start cold.
+- **Config parity** - `[wiki]`, `[selector]`, `[sources]`, BOM files, and case-insensitive backend values now work as documented.
+- **Safer plugins** - third-party runner entry points require opt-in or allow-listing before import.
+- **Run history** - `kairos history` and `kairos feedback-list` expose stored runs and feedback.
 
-Full migration notes: [`docs/UPGRADING.md`](docs/UPGRADING.md). Zero breaking changes; `v0.1.x → v0.2.0` is in-place.
+Full migration notes: [`docs/UPGRADING.md`](docs/UPGRADING.md). Existing v0.2 wikis upgrade in place.
 
 ## Install
 
@@ -46,12 +45,12 @@ uv tool install kairos-agent
 
 ```powershell
 # Windows
-irm https://raw.githubusercontent.com/vinothhacks/kairos/v0.2.0/install.ps1 | iex
+irm https://raw.githubusercontent.com/vinothhacks/kairos/v0.3.0/install.ps1 | iex
 ```
 
 ```bash
 # macOS / Linux
-curl -fsSL https://raw.githubusercontent.com/vinothhacks/kairos/v0.2.0/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/vinothhacks/kairos/v0.3.0/install.sh | sh
 ```
 
 ## 30-second demo
@@ -164,6 +163,8 @@ See [`docs/architecture.md`](docs/architecture.md) for the full diagram.
 | `kairos lint` | Local: orphans, missing concepts, stale pages. LLM: contradictions, gaps. |
 | `kairos run "<task>"` | Auto-select technique, dispatch runner, log the run. |
 | `kairos run "<task>" --dry` | Show the top-3 candidate techniques without running. |
+| `kairos history` | List recent runs from `.kairos/kairos.db`. |
+| `kairos feedback-list` | List saved feedback rows. |
 | `kairos doctor` | Print env diagnostics. |
 | `kairos version` | Print version. |
 

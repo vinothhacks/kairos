@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import json
 import os
-import random
+import secrets
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
@@ -78,7 +78,7 @@ class StubLLMClient(LLMClient):
 
     def __post_init__(self) -> None:
         if self.stub_path and self.stub_path.exists():
-            self._canned = json.loads(self.stub_path.read_text(encoding="utf-8"))
+            self._canned = json.loads(self.stub_path.read_text(encoding="utf-8-sig"))
 
     def _reply_for(self, tool: str, message: str) -> str:
         # exact-key lookup first, then prefix lookup, then a deterministic default
@@ -194,7 +194,8 @@ class MCPLLMClient(LLMClient):
     def _sleep(self, attempt: int) -> None:
         delay = self.backoff_base * (2 ** (attempt - 1))
         # tiny jitter so concurrent clients don't sync up
-        delay += random.uniform(0.0, max(0.05, self.backoff_base / 4))
+        jitter_max = max(0.05, self.backoff_base / 4)
+        delay += jitter_max * (secrets.randbelow(1000) / 1000.0)
         time.sleep(delay)
 
     def chatgpt_send(self, message: str, *, conversation_id: str | None = None) -> LLMResult:

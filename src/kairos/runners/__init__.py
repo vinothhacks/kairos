@@ -13,6 +13,8 @@ add them to `RUNNERS`.
 """
 from __future__ import annotations
 
+import os
+import sys
 from collections.abc import Callable
 from importlib.metadata import entry_points
 from pathlib import Path
@@ -41,23 +43,44 @@ _PLUGINS_LOADED = False
 
 
 def _load_plugins() -> None:
-    """Discover Runner subclasses exposed via the `kairos.runners` entry-point group."""
+    """Discover Runner subclasses exposed via the `kairos.runners` entry-point group.
+
+    Third-party entry points are executable import hooks, so they are disabled
+    unless the user opts in with KAIROS_ENABLE_PLUGINS=1 or allow-lists names in
+    KAIROS_RUNNER_PLUGINS.
+    """
     global _PLUGINS_LOADED
     if _PLUGINS_LOADED:
         return
     _PLUGINS_LOADED = True
+    allow_list = {
+        item.strip()
+        for item in os.environ.get("KAIROS_RUNNER_PLUGINS", "").split(",")
+        if item.strip()
+    }
+    plugins_enabled = os.environ.get("KAIROS_ENABLE_PLUGINS") == "1"
+    if not plugins_enabled and not allow_list:
+        return
     try:
         eps = entry_points(group="kairos.runners")
     except Exception:  # noqa: BLE001 - importlib.metadata can be quirky
         return
     for ep in eps:
+        if not plugins_enabled and ep.name not in allow_list:
+            continue
+        cls = None
         try:
             cls = ep.load()
-        except Exception:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001
+            print(f"[runners] skipped plugin {ep.name!r}: {exc}", file=sys.stderr)
+        if cls is None:
             continue
+        inst = None
         try:
             inst = cls() if isinstance(cls, type) else cls
-        except Exception:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001
+            print(f"[runners] skipped plugin {ep.name!r}: {exc}", file=sys.stderr)
+        if inst is None:
             continue
         if isinstance(inst, Runner) and inst.name and inst.name not in RUNNERS:
             RUNNERS[inst.name] = inst
@@ -89,9 +112,13 @@ def dispatch(
     """
     _load_plugins()
     key = technique.lower()
-    inst = RUNNERS.get(key)
-    if inst is not None:
-        return inst.run(
+    runner = RUNNERS.get(key)
+    if runner is not None:
+        if not isinstance(runner, Runner):
+            raise ValueError(f"registered object for {technique!r} is not a Runner")
+        if not runner.applicable(task):
+            raise ValueError(f"runner {technique!r} is not applicable to this task")
+        return runner.run(
             task=task,
             project_root=project_root,
             llm=llm,

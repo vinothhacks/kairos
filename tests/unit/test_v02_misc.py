@@ -20,7 +20,7 @@ def test_kairos_db_home_redirects_db(tmp_path: Path, monkeypatch: pytest.MonkeyP
 
     monkeypatch.setenv("KAIROS_DB_HOME", str(db_home))
     paths = WikiPaths(root=project)
-    assert paths.db.parent == db_home.resolve()
+    assert paths.db.parent.parent == db_home.resolve()
     assert paths.db.name == "kairos.db"
 
     monkeypatch.delenv("KAIROS_DB_HOME")

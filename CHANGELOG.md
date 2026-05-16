@@ -2,6 +2,32 @@
 
 All notable changes to `kairos` are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2026-05-16
+
+The v3 audit-fix release. This closes the 5 KAI3 supply-chain/install findings found after v0.2.1 and the 30 KAI2 carryovers that were intentionally deferred from the install hotfix.
+
+### Security
+- SHA-pinned every third-party GitHub Action in `ci.yml`, `release.yml`, and the composite setup action (KAI3-001).
+- Scoped release write permissions to the publish job only, with test/lint jobs read-only (KAI3-002).
+- Added a tag/version gate before release builds so `vX.Y.Z`, `pyproject.toml`, and `src/kairos/__init__.py` must agree (KAI3-003).
+- Pinned installer defaults to `kairos-agent==0.3.0` with override hooks, and made the PowerShell installer avoid false failures from benign native stderr (KAI3-004, KAI3-005).
+- Raised `pytest` to `9.0.3` and added Bandit to the dev toolchain; dependency audit and Bandit now pass cleanly (KAI2-001, KAI2-027).
+
+### Fixed
+- `kairos init` now populates `wiki_index`/`wiki_relations` immediately for seed and existing pages (KAI2-002).
+- `kairos run --json` and `kairos run --json --dry` now emit parseable JSON only (KAI2-003, KAI2-004, KAI2-021).
+- `kairos lint` now honors config values, including `[wiki].stale_after_days` and legacy `[lint].stale_after_days` (KAI2-005).
+- `kairos feedback` now returns a clean error for unknown run ids instead of leaking SQLite integrity errors (KAI2-006).
+- Config parsing now matches the architecture doc: `[wiki]`, `[selector]`, `[sources]`, BOM-tolerant TOML, lowercased `KAIROS_LLM_BACKEND`, and source-path capture (KAI2-007, KAI2-012, KAI2-013, KAI2-023).
+- Runner plugins are opt-in/allow-listed before import, dispatch validates `Runner` instances, and `applicable()` gates execution (KAI2-008, KAI2-009, KAI2-010, KAI2-022).
+- Stub JSON files tolerate UTF-8 BOMs; help and CLI output preserve literal wikilinks without stray Rich markup (KAI2-011, KAI2-014, KAI2-015).
+- Lint parsing preserves the `no findings` sentinel and shares wikilink normalization with the indexer (KAI2-016, KAI2-019).
+- Wiki indexing keeps foreign keys enabled, prunes stale rows, and now has real `lookup`/`remove_page` callers (KAI2-017, KAI2-018).
+- Run tracing uses `perf_counter()` for better Windows granularity (KAI2-020).
+- `IngestResult.raw_path` is surfaced in CLI output, `WikiPaths` coerces string roots, and `KAIROS_DB_HOME` namespaces databases by project hash (KAI2-024, KAI2-026, KAI2-028).
+- Added `kairos history` and `kairos feedback-list` read surfaces (KAI2-025, KAI2-029).
+- Query ranking now prefers `wiki_index` metadata and parses only final candidates on the cold path (KAI2-030).
+
 ## [0.2.1] - 2026-05-11
 
 The install hotfix. Both `install.ps1` and `install.sh` have been calling `uv tool install kairos-agent` since v0.1.0, but **the package was never published to PyPI** — every one-liner install attempt has been failing with `× No solution found when resolving dependencies` for every user since day one. v0.2.1 publishes the package to PyPI via GitHub Actions Trusted Publishing (OIDC, no token in repo) and ships a tag-triggered `release.yml` so this can never recur.
@@ -114,6 +140,7 @@ The first release. The minimum surface that proves the wedge: an LLM Wiki that p
 - The `--fix` flag on `lint` is a v0.2 placeholder; v0.1 is report-only.
 - Postgres backend is optional and off by default; v0.1 is SQLite-only in practice.
 
+[0.3.0]: https://github.com/vinothhacks/kairos/releases/tag/v0.3.0
 [0.2.1]: https://github.com/vinothhacks/kairos/releases/tag/v0.2.1
 [0.2.0]: https://github.com/vinothhacks/kairos/releases/tag/v0.2.0
 [0.1.1]: https://github.com/vinothhacks/kairos/releases/tag/v0.1.1

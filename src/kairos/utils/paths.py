@@ -6,6 +6,7 @@ that directory (the wiki itself stays under `<project>/`). This matches the
 """
 from __future__ import annotations
 
+import hashlib
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -16,6 +17,9 @@ class WikiPaths:
     """Resolved paths for a kairos project rooted at `root`."""
 
     root: Path
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "root", Path(self.root).expanduser().resolve())
 
     @property
     def agents_md(self) -> Path:
@@ -63,7 +67,8 @@ class WikiPaths:
         # outside the repo. Default stays <project>/.kairos/kairos.db.
         override = os.environ.get("KAIROS_DB_HOME", "").strip()
         if override:
-            return Path(override).expanduser().resolve() / "kairos.db"
+            project_hash = hashlib.sha256(str(self.root).encode("utf-8")).hexdigest()[:12]
+            return Path(override).expanduser().resolve() / project_hash / "kairos.db"
         return self.state_dir / "kairos.db"
 
     def ensure_dirs(self) -> None:

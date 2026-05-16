@@ -1,6 +1,29 @@
 # Upgrading kairos
 
-This page covers in-place upgrades between minor releases. The TL;DR for v0.1.x → v0.2.0: nothing breaks. New behaviour activates on first run.
+This page covers in-place upgrades between minor releases. The TL;DR for v0.2.x -> v0.3.0: no migration is required, but installers now default to the exact release version and shared database homes are project-namespaced.
+
+---
+
+## v0.2.x -> v0.3.0
+
+**No manual migration required.** Existing wikis keep working. The first `kairos init`, `kairos run`, or `kairos lint` after upgrading may refresh `wiki_index` rows and create a project-specific database subfolder when `KAIROS_DB_HOME` is set.
+
+### Worth knowing
+
+| Change | Impact |
+|---|---|
+| **Pinned installers** | `install.ps1` and `install.sh` default to `kairos-agent==0.3.0`. Override with `-Version` on PowerShell or `KAIROS_VERSION=...` on sh. |
+| **GitHub release hardening** | Release actions are SHA-pinned, publish permissions are job-scoped, and tags must match package versions before build. |
+| **Config parser matches docs** | `[wiki] stale_after_days`, `auto_save_query_answers`, `[selector] default_technique`, `require_runner`, and `[sources]` now load. UTF-8 BOM config files are parsed. |
+| **Plugin runners are opt-in** | Third-party `kairos.runners` entry points are not imported unless `KAIROS_ENABLE_PLUGINS=1` or `KAIROS_RUNNER_PLUGINS=name1,name2` is set. |
+| **JSON output is clean** | `kairos run --json` and `kairos run --json --dry` write JSON only, with no Rich banners. |
+| **Read surfaces** | `kairos history` lists recent runs and `kairos feedback-list` lists stored feedback. |
+| **Shared DB homes** | `KAIROS_DB_HOME` now stores each project under a short project hash to avoid mixing runs from unrelated wikis. |
+
+### Compatibility notes
+
+- If you intentionally relied on automatic third-party runner imports, set `KAIROS_ENABLE_PLUGINS=1` or allow-list the entry point names.
+- If external scripts assumed `KAIROS_DB_HOME/kairos.db`, update them to discover the path through `WikiPaths(root).db` or run `kairos doctor`.
 
 ---
 

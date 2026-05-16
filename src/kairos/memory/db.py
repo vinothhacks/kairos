@@ -89,10 +89,10 @@ class Database:
     def list_feedback(self, *, run_id: int | None = None) -> list[sqlite3.Row]:
         with self.conn() as c:
             if run_id is None:
-                cur = c.execute("SELECT * FROM feedback ORDER BY id DESC")
+                cur = c.execute("SELECT rowid AS id, * FROM feedback ORDER BY rowid DESC")
             else:
                 cur = c.execute(
-                    "SELECT * FROM feedback WHERE run_id = ? ORDER BY id DESC",
+                    "SELECT rowid AS id, * FROM feedback WHERE run_id = ? ORDER BY rowid DESC",
                     (run_id,),
                 )
             return list(cur.fetchall())

@@ -57,3 +57,24 @@ def test_load_config_handles_partial_file(tmp_path: Path) -> None:
     cfg = load_config(tmp_path)
     assert cfg.max_react_steps == 9
     assert cfg.rag_top_k > 0  # default still applies
+
+
+def test_load_config_reads_bom_wiki_selector_and_sources(tmp_path: Path) -> None:
+    """KAI2-012/KAI2-023: BOM files and documented tables are parsed."""
+    state = tmp_path / ".kairos"
+    state.mkdir()
+    (state / "config.toml").write_bytes(
+        b'\xef\xbb\xbf[llm]\nbackend = "STUB"\n\n'
+        b"[wiki]\nstale_after_days = 7\nauto_save_query_answers = true\n\n"
+        b'[selector]\ndefault_technique = "react"\nrequire_runner = false\n\n'
+        b'[sources]\nnotes = "./raw/notes"\n'
+    )
+
+    cfg = load_config(tmp_path)
+    assert cfg.config_had_bom is True
+    assert cfg.llm_backend == "stub"
+    assert cfg.stale_after_days == 7
+    assert cfg.auto_save_query_answers is True
+    assert cfg.default_technique == "react"
+    assert cfg.require_runner is False
+    assert cfg.source_paths == {"notes": "./raw/notes"}

@@ -14,10 +14,13 @@ from __future__ import annotations
 
 import datetime as _dt
 import shutil
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from kairos.memory.wiki_index import WikiIndexer
 from kairos.utils.paths import WikiPaths, seed_dir
+from kairos.wiki.schema import extract_wikilinks, parse_page
 
 INDEX_TEMPLATE = """\
 # Wiki Index
@@ -156,7 +159,54 @@ def init_project(root: Path, *, force: bool = False, with_seed: bool = True) -> 
                 else:
                     skipped.append(dst)
 
+        _index_existing_wiki_pages(paths)
+
     return InitResult(created=created, skipped=skipped, seeded_concepts=seeded, backups=backups)
+
+
+def _index_existing_wiki_pages(paths: WikiPaths) -> None:
+    """Populate wiki_index for pages present after init.
+
+    `kairos init` is the first command most users run. If it seeds concept
+    pages but leaves the cache empty, selector/query fall back to filesystem
+    walks until a later ingest happens. Index all valid seed/existing pages so
+    the cache is useful immediately.
+    """
+    indexer = WikiIndexer(db_path=paths.db)
+    seen_slugs: set[str] = set()
+    for folder in (paths.concepts, paths.sources, paths.comparisons):
+        for page in sorted(folder.glob("*.md")):
+            parsed = None
+            try:
+                parsed = parse_page(page.read_text(encoding="utf-8"))
+            except Exception as exc:  # noqa: BLE001
+                print(f"[init] skipped indexing malformed page {page}: {exc}", file=sys.stderr)
+            if parsed is None:
+                continue
+            fm, body = parsed
+            rel = page.relative_to(paths.root).as_posix()
+            slug = page.stem
+            seen_slugs.add(slug)
+            previous = indexer.lookup(slug)
+            indexer.upsert_page(slug=slug, fm=fm, body=body, file_rel=rel)
+            indexer.upsert_relations(
+                from_slug=slug,
+                links=extract_wikilinks(body),
+                related=fm.related,
+            )
+            if previous and previous.get("file") != rel:
+                indexer.remove_page(str(previous["slug"]))
+                indexer.upsert_page(slug=slug, fm=fm, body=body, file_rel=rel)
+                indexer.upsert_relations(
+                    from_slug=slug,
+                    links=extract_wikilinks(body),
+                    related=fm.related,
+                )
+    for row in indexer.all_pages():
+        slug = str(row.get("slug", ""))
+        file_rel = row.get("file")
+        if slug and (slug not in seen_slugs or not isinstance(file_rel, str) or not (paths.root / file_rel).exists()):
+            indexer.remove_page(slug)
 
 
 def _minimal_agents_stub() -> str:

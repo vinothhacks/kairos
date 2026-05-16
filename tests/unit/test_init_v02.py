@@ -1,6 +1,7 @@
 """KAI-001 regression tests: kairos init --force must not silently destroy user content."""
 from __future__ import annotations
 
+import sqlite3
 from pathlib import Path
 
 from kairos.wiki.init import init_project
@@ -53,3 +54,16 @@ def test_force_does_not_create_bak_when_target_did_not_exist(tmp_path: Path) -> 
     init_project(tmp_path, force=True, with_seed=False)
     bak_files = list((tmp_path / "wiki").glob("*.bak*"))
     assert bak_files == []
+
+
+def test_init_indexes_seed_concepts_in_wiki_index(tmp_path: Path) -> None:
+    """KAI2-002: init must populate wiki_index for the bundled seed pages."""
+    result = init_project(tmp_path)
+    assert result.seeded_concepts >= 21
+
+    with sqlite3.connect(tmp_path / ".kairos" / "kairos.db") as conn:
+        count = conn.execute("SELECT COUNT(*) FROM wiki_index WHERE type='concept'").fetchone()[0]
+        relation_count = conn.execute("SELECT COUNT(*) FROM wiki_relations").fetchone()[0]
+
+    assert count >= result.seeded_concepts
+    assert relation_count > 0

@@ -15,6 +15,7 @@ src/kairos/runners/. The CLI does Rich formatting and error handling only.
 """
 from __future__ import annotations
 
+import json as _json
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -35,6 +36,7 @@ app = typer.Typer(
     add_completion=False,
     no_args_is_help=True,
     help="kairos - Stop guessing. Run the right pattern. A CLI for executable agent knowledge.",
+    rich_markup_mode=None,
 )
 console = Console()
 
@@ -95,10 +97,11 @@ def ingest(
         console.print(f"[red]error[/]: source file is not valid UTF-8: {e}")
         raise typer.Exit(2) from e
 
-    console.print(f"[green]ingested[/]: {result.title}", markup=False)
+    console.print(f"ingested: {result.title}", markup=False)
     table = Table(title=f"writes ({len(result.all_writes)})")
     table.add_column("kind")
     table.add_column("path")
+    table.add_row("raw", str(result.raw_path.relative_to(root)))
     table.add_row("source", str(result.source_page.relative_to(root)))
     for p in result.concept_pages_created:
         table.add_row("concept (new)", str(p.relative_to(root)))
@@ -117,9 +120,15 @@ def query(
     from kairos.wiki.query import query_wiki
 
     root = (project or resolve_root()).resolve()
+    cfg = load_config(root)
     llm = LLMClient.from_env()
     try:
-        result = query_wiki(question, project_root=root, llm=llm, save_to_wiki=save)
+        result = query_wiki(
+            question,
+            project_root=root,
+            llm=llm,
+            save_to_wiki=save or cfg.auto_save_query_answers,
+        )
     except MCPUnreachable as e:
         console.print(f"[red]llm-mcp unreachable[/]: {e}")
         raise typer.Exit(3) from e
@@ -144,9 +153,10 @@ def lint(
     from kairos.wiki.lint import lint_wiki
 
     root = (project or resolve_root()).resolve()
+    cfg = load_config(root)
     llm = LLMClient.from_env()
     try:
-        result = lint_wiki(project_root=root, llm=llm, fix=fix)
+        result = lint_wiki(project_root=root, llm=llm, fix=fix, stale_after_days=cfg.stale_after_days)
     except MCPUnreachable as e:
         console.print(f"[red]llm-mcp unreachable[/]: {e}")
         raise typer.Exit(3) from e
@@ -197,6 +207,7 @@ def run(
     from kairos.selector import select_technique
 
     root = (project or resolve_root()).resolve()
+    cfg = load_config(root)
     llm = LLMClient.from_env()
 
     selected_by = "user"
@@ -204,8 +215,30 @@ def run(
 
     try:
         if technique == "auto":
-            ranking = select_technique(task=task, project_root=root, llm=llm)
+            ranking = select_technique(
+                task=task,
+                project_root=root,
+                llm=llm,
+                require_runner=cfg.require_runner,
+                tie_break_threshold=cfg.tie_break_threshold,
+                default_technique=cfg.default_technique,
+            )
             if dry:
+                if json_out:
+                    dry_payload: dict[str, object] = {
+                        "task": task,
+                        "candidates": [
+                            {
+                                "rank": i,
+                                "technique": choice.technique,
+                                "score": choice.score,
+                                "rationale": choice.rationale,
+                            }
+                            for i, choice in enumerate(ranking[:3], 1)
+                        ],
+                    }
+                    typer.echo(_json.dumps(dry_payload, sort_keys=True))
+                    return
                 table = Table(title=f"top-3 techniques for: {task}")
                 table.add_column("rank")
                 table.add_column("technique")
@@ -220,11 +253,18 @@ def run(
             chosen = ranking[0].technique
             selected_by = "selector"
             selector_score = float(ranking[0].score)
-            console.print(
-                f"[cyan]selector picked:[/] [bold]{chosen}[/] (score={selector_score:.2f})"
-            )
+            if not json_out:
+                console.print(
+                    f"[cyan]selector picked:[/] [bold]{chosen}[/] (score={selector_score:.2f})"
+                )
         else:
             chosen = technique
+
+        runner_kwargs: dict[str, object] = {}
+        if chosen == "rag":
+            runner_kwargs.update({"chunk_size": cfg.rag_chunk_size, "top_k": cfg.rag_top_k})
+        elif chosen == "react":
+            runner_kwargs["max_steps"] = cfg.max_react_steps
 
         result = dispatch(
             chosen,
@@ -233,6 +273,7 @@ def run(
             llm=llm,
             selected_by=selected_by,
             selector_score=selector_score,
+            **runner_kwargs,
         )
     except MCPUnreachable as e:
         console.print(f"[red]llm-mcp unreachable[/]: {e}")
@@ -242,8 +283,6 @@ def run(
         raise typer.Exit(3) from e
 
     if json_out:
-        import json as _json
-
         # KAI-034: trace is no longer carried on RunResult; read it back from
         # disk if a trace_path was produced. Best-effort - if the file is
         # missing or malformed we ship an empty list rather than crashing.
@@ -254,11 +293,13 @@ def run(
                 if not line:
                     continue
                 try:
-                    trace_events.append(_json.loads(line))
+                    loaded = _json.loads(line)
                 except _json.JSONDecodeError:
                     continue
+                if isinstance(loaded, dict):
+                    trace_events.append(loaded)
 
-        payload = {
+        run_payload: dict[str, object] = {
             "run_id": result.run_id,
             "technique": result.technique,
             "task": result.task,
@@ -272,7 +313,7 @@ def run(
             "trace": trace_events,
             "error": result.error,
         }
-        console.print(_json.dumps(payload, indent=2), markup=False, highlight=False)
+        typer.echo(_json.dumps(run_payload, sort_keys=True))
         return
 
     console.rule(f"[bold cyan]{chosen}[/] -> answer")
@@ -336,10 +377,63 @@ def feedback(
     root = (project or resolve_root()).resolve()
     paths = WikiPaths(root=root)
     db = Database(path=paths.db)
+    with db.conn() as conn:
+        exists = conn.execute("SELECT 1 FROM runs WHERE id = ?", (run_id,)).fetchone()
+    if exists is None:
+        console.print(f"[red]error[/]: run id {run_id} not found")
+        raise typer.Exit(1)
     feedback_id = db.insert_feedback(run_id=run_id, rating=rating, note=note or None)
     console.print(
         f"[green]recorded[/]: feedback id={feedback_id} for run {run_id} (rating={rating})"
     )
+
+
+@app.command()
+def history(
+    project: Path = typer.Option(None, "--project", "-p", help="Project root."),
+    limit: int = typer.Option(20, "--limit", "-n", help="Maximum runs to show."),
+) -> None:
+    """List recent runs from .kairos/kairos.db."""
+    from kairos.memory.db import Database
+
+    root = (project or resolve_root()).resolve()
+    rows = Database(path=WikiPaths(root=root).db).list_runs(limit=limit)
+    table = Table(title="kairos history")
+    for column in ("id", "ts", "technique", "status", "task"):
+        table.add_column(column)
+    for row in rows:
+        table.add_row(
+            str(row["id"]),
+            str(row["ts"]),
+            str(row["technique"]),
+            str(row["status"]),
+            str(row["task"])[:80],
+        )
+    console.print(table)
+
+
+@app.command("feedback-list")
+def list_feedback(
+    project: Path = typer.Option(None, "--project", "-p", help="Project root."),
+    run_id: int | None = typer.Option(None, "--run-id", help="Filter feedback for one run id."),
+) -> None:
+    """List recorded feedback rows."""
+    from kairos.memory.db import Database
+
+    root = (project or resolve_root()).resolve()
+    rows = Database(path=WikiPaths(root=root).db).list_feedback(run_id=run_id)
+    table = Table(title="kairos feedback")
+    for column in ("id", "run_id", "rating", "ts", "note"):
+        table.add_column(column)
+    for row in rows:
+        table.add_row(
+            str(row["id"]),
+            str(row["run_id"]),
+            str(row["rating"]),
+            str(row["ts"]),
+            str(row["note"] or ""),
+        )
+    console.print(table)
 
 
 @app.command()
@@ -360,6 +454,12 @@ def doctor() -> None:
         "[green]ok[/]" if cfg.config_file else "[dim]not present (defaults)[/]",
         str(cfg.config_file) if cfg.config_file else "(using built-in defaults)",
     )
+    if cfg.config_had_bom:
+        table.add_row(
+            "config warning",
+            "[yellow]warning[/]",
+            "config.toml had a UTF-8 BOM; parsed with utf-8-sig",
+        )
     # KAI-011: real liveness probe instead of a hard-coded 'ok'.
     backend = cfg.llm_backend
     mcp_url = cfg.mcp_url

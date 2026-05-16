@@ -4,13 +4,13 @@ on:
   push:
     tags: ["v*.*.*"]
 
-permissions:
-  contents: write    # required by softprops/action-gh-release to attach assets
-  id-token: write    # required by pypa/gh-action-pypi-publish for OIDC trusted publishing
+permissions: {}
 
 jobs:
   test:
     name: test (py${{ matrix.python-version }} on ${{ matrix.os }})
+    permissions:
+      contents: read
     strategy:
       fail-fast: true
       matrix:
@@ -18,7 +18,7 @@ jobs:
         os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
       - uses: ./.github/actions/setup-kairos
         with:
           python-version: ${{ matrix.python-version }}
@@ -28,8 +28,10 @@ jobs:
   lint:
     name: lint
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
       - uses: ./.github/actions/setup-kairos
         with:
           python-version: "3.13"
@@ -41,14 +43,46 @@ jobs:
     name: build + publish to PyPI
     runs-on: ubuntu-latest
     needs: [test, lint]
+    permissions:
+      contents: write
+      id-token: write
     environment:
       name: pypi
       url: https://pypi.org/project/kairos-agent/
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v3
+        uses: astral-sh/setup-uv@8d55fbecc275b1c35dbe060458839f8d30439ccf
+
+      - name: Verify tag matches package version
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${{ github.ref_name }}"
+          tag="${tag#v}"
+          pyproject_version="$(
+            python - <<'PY'
+          import tomllib
+          with open("pyproject.toml", "rb") as fh:
+              print(tomllib.load(fh)["project"]["version"])
+          PY
+          )"
+          init_version="$(
+            python - <<'PY'
+          import pathlib
+          import re
+          text = pathlib.Path("src/kairos/__init__.py").read_text(encoding="utf-8")
+          match = re.search(r'__version__\s*=\s*"([^"]+)"', text)
+          if not match:
+              raise SystemExit("__version__ missing from src/kairos/__init__.py")
+          print(match.group(1))
+          PY
+          )"
+          if [ "$tag" != "$pyproject_version" ] || [ "$tag" != "$init_version" ]; then
+            echo "tag=$tag pyproject.toml=$pyproject_version src/kairos/__init__.py=$init_version mismatch" >&2
+            exit 1
+          fi
 
       - name: Build sdist + wheel
         run: uv build
@@ -57,13 +91,13 @@ jobs:
         run: ls -la dist/
 
       - name: Publish to PyPI (Trusted Publishing OIDC)
-        uses: pypa/gh-action-pypi-publish@release/v1
+        uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b
         with:
           packages-dir: dist/
           # No api token; OIDC handshake authenticates via the configured Trusted Publisher.
 
       - name: Attach wheel + sdist to GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65
         with:
           # Only ship real artifacts; uv build leaves a marker `.gitignore` in dist/
           # that we do NOT want as a release asset (caught on v0.2.1).

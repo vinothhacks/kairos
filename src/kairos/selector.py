@@ -70,6 +70,8 @@ def select_technique(
     project_root: Path,
     llm: LLMClient | None = None,
     require_runner: bool = True,
+    tie_break_threshold: float = 0.05,
+    default_technique: str = DEFAULT_TECHNIQUE,
 ) -> list[TechniqueChoice]:
     """Rank techniques against the task. Returns top-N (always at least 1).
 
@@ -118,7 +120,7 @@ def select_technique(
         # The wiki has no concept pages with runners. Fall back to default.
         return [
             TechniqueChoice(
-                technique=DEFAULT_TECHNIQUE,
+                technique=default_technique,
                 score=0.0,
                 rationale="fallback: no eligible technique pages found",
                 page=None,
@@ -135,7 +137,7 @@ def select_technique(
         top = candidates[0]
         for i in range(1, min(3, len(candidates))):
             cand = candidates[i]
-            if abs(top.score - cand.score) < 0.05 and cand.technique == DEFAULT_TECHNIQUE:
+            if abs(top.score - cand.score) < tie_break_threshold and cand.technique == default_technique:
                 candidates[0], candidates[i] = cand, top
                 candidates[0].rationale += " | tie-break preferred default"
                 break
