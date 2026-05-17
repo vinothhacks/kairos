@@ -25,7 +25,7 @@ from pathlib import Path
 from textwrap import dedent
 from typing import Literal
 
-from kairos.llm.mcp_client import LLMClient
+from kairos.llm.providers import LLMClient
 from kairos.memory.wiki_index import WikiIndexer, normalize_wikilink
 from kairos.utils.paths import WikiPaths
 from kairos.wiki.schema import (

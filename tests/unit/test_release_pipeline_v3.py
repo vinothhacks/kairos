@@ -83,9 +83,9 @@ def test_installers_pin_default_package_version_and_allow_override() -> None:
     sh = (ROOT / "install.sh").read_text(encoding="utf-8")
 
     assert "kairos-agent==$Version" in ps1
-    assert "param(" in ps1 and "$Version = '0.3.0'" in ps1
+    assert "param(" in ps1 and "$Version = '0.4.0'" in ps1
     assert "kairos-agent==$VERSION" in sh
-    assert 'VERSION="${KAIROS_VERSION:-0.3.0}"' in sh
+    assert 'VERSION="${KAIROS_VERSION:-0.4.0}"' in sh
 
 
 def test_powershell_installer_does_not_stop_on_benign_stderr() -> None:
@@ -95,3 +95,20 @@ def test_powershell_installer_does_not_stop_on_benign_stderr() -> None:
     assert "$ErrorActionPreference = 'Stop'" not in ps1
     assert "2>&1 | ForEach-Object { Write-Host $_ }" in ps1
     assert "$LASTEXITCODE" in ps1
+
+
+def test_ci_requires_v04_audit_and_mcp_gates() -> None:
+    """v0.4: issue-1 NOT RUN gaps must stay wired into CI."""
+    ci_text = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+
+    assert "uv run bandit -ll -r src/" in ci_text
+    assert "uv run pip-audit --strict" in ci_text
+    assert "uv run radon cc -a src/" in ci_text
+    assert "semgrep --config p/python --config p/security-audit --error src/" in ci_text
+    assert "live-ollama" in ci_text
+    assert "KAIROS_LIVE=ollama" in ci_text
+    assert "mcp-smoke" in ci_text
+    assert "tests/integration/test_mcp_server.py" in ci_text
+    assert "tests/regression/v2/v2_verification.py" in ci_text
+    assert "v2-regression-report" in ci_text
+    assert "|| true" not in ci_text

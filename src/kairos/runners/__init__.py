@@ -19,7 +19,7 @@ from collections.abc import Callable
 from importlib.metadata import entry_points
 from pathlib import Path
 
-from kairos.llm.mcp_client import LLMClient
+from kairos.llm.providers import LLMClient
 from kairos.runners.base import Runner, RunResult
 from kairos.runners.rag import RagRunner, run_rag
 from kairos.runners.react import ReactRunner, run_react

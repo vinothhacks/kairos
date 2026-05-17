@@ -7,7 +7,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from kairos.llm.mcp_client import LLMClient
+from kairos.llm.providers import LLMClient
 from kairos.memory.db import Database
 from kairos.utils.paths import WikiPaths
 

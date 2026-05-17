@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import sqlite3
+import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -118,11 +119,21 @@ def _apply_concurrency_pragmas(db_path: Path) -> None:
     can fall back to DELETE on filesystems that do not support WAL (network FS),
     which is fine - the busy_timeout still protects writers.
     """
-    c = sqlite3.connect(db_path, timeout=5.0)
-    try:
-        c.execute("PRAGMA journal_mode = WAL;")
-        c.execute("PRAGMA synchronous = NORMAL;")
-        c.execute("PRAGMA busy_timeout = 5000;")
-        c.commit()
-    finally:
-        c.close()
+    last_error: sqlite3.OperationalError | None = None
+    for attempt in range(5):
+        c = sqlite3.connect(db_path, timeout=5.0)
+        try:
+            c.execute("PRAGMA busy_timeout = 5000;")
+            c.execute("PRAGMA journal_mode = WAL;")
+            c.execute("PRAGMA synchronous = NORMAL;")
+            c.commit()
+            return
+        except sqlite3.OperationalError as exc:
+            last_error = exc
+            if "locked" not in str(exc).lower() or attempt == 4:
+                raise
+            time.sleep(0.05 * (attempt + 1))
+        finally:
+            c.close()
+    if last_error is not None:
+        raise last_error

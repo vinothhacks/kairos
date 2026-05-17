@@ -2,6 +2,27 @@
 
 All notable changes to `kairos` are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] - 2026-05-17
+
+The backend and MCP release. This removes the single `llm-mcp` runtime dependency, adds direct model backends, exposes kairos itself as a stdio MCP server, and turns the previously "NOT RUN" audit checks into required CI gates.
+
+### Added
+- Direct LLM providers: `stub`, `ollama`, `openai`, `anthropic`, and `openai_compat`.
+- `kairos mcp serve`, a stdio MCP server exposing `select_technique`, `run_technique`, `query_wiki`, `lint_wiki`, `ingest_source`, `history`, and `feedback`.
+- `[mcp-server]` optional extra for users who want to run kairos from Cursor, Claude Desktop, or any MCP client.
+- CI gates for Bandit, strict `pip-audit`, Radon average complexity, Semgrep security rules, MCP smoke tests, live Ollama smoke tests, and a KAI2 closure artifact.
+
+### Changed
+- Default `KAIROS_LLM_BACKEND` is now `stub` for safe offline behavior.
+- `KAIROS_LLM_BACKEND=mcp` is a migration error. Use `ollama`, `openai`, `anthropic`, `openai_compat`, or `stub`.
+- Installers default to `kairos-agent==0.4.0`.
+- `kairos doctor` now reports the active direct provider instead of probing `llm-mcp`.
+
+### Fixed
+- The issue-1 "Live llm-mcp / Claude backend: NOT RUN" gap is replaced by direct-provider coverage and an Ollama live CI smoke.
+- The issue-1 "Ruff/mypy/build audit: NOT RUN" gap is closed with required CI checks.
+- KAI2-001 through KAI2-030 remain covered through `tests/regression/v2/` and the v2 closure report artifact.
+
 ## [0.3.0] - 2026-05-16
 
 The v3 audit-fix release. This closes the 5 KAI3 supply-chain/install findings found after v0.2.1 and the 30 KAI2 carryovers that were intentionally deferred from the install hotfix.
@@ -140,6 +161,7 @@ The first release. The minimum surface that proves the wedge: an LLM Wiki that p
 - The `--fix` flag on `lint` is a v0.2 placeholder; v0.1 is report-only.
 - Postgres backend is optional and off by default; v0.1 is SQLite-only in practice.
 
+[0.4.0]: https://github.com/vinothhacks/kairos/releases/tag/v0.4.0
 [0.3.0]: https://github.com/vinothhacks/kairos/releases/tag/v0.3.0
 [0.2.1]: https://github.com/vinothhacks/kairos/releases/tag/v0.2.1
 [0.2.0]: https://github.com/vinothhacks/kairos/releases/tag/v0.2.0

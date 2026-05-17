@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from kairos.llm.mcp_client import StubLLMClient
+from kairos.llm.providers import StubLLMClient
 from kairos.runners import dispatch
 from kairos.runners.rag import run_rag
 from kairos.runners.react import run_react

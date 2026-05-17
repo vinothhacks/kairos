@@ -11,8 +11,7 @@ from kairos.utils.config import KairosConfig, load_config
 def test_load_config_returns_defaults_when_no_file(tmp_path: Path) -> None:
     cfg = load_config(tmp_path)
     assert isinstance(cfg, KairosConfig)
-    assert cfg.llm_backend in {"mcp", "stub"}
-    assert cfg.mcp_url.startswith("http")
+    assert cfg.llm_backend == "stub"
     assert cfg.max_react_steps > 0
     assert cfg.rag_chunk_size > 0
     assert cfg.rag_top_k > 0
@@ -23,14 +22,14 @@ def test_load_config_reads_toml_file(tmp_path: Path) -> None:
     state = tmp_path / ".kairos"
     state.mkdir()
     (state / "config.toml").write_text(
-        '[llm]\nbackend = "stub"\nmcp_url = "http://example.com:9000"\n\n'
+        '[llm]\nbackend = "stub"\nstub_path = "stub.json"\n\n'
         "[runners]\nmax_react_steps = 12\nrag_chunk_size = 50\nrag_top_k = 4\n\n"
         "[lint]\nstale_after_days = 90\n",
         encoding="utf-8",
     )
     cfg = load_config(tmp_path)
     assert cfg.llm_backend == "stub"
-    assert cfg.mcp_url == "http://example.com:9000"
+    assert cfg.stub_path == "stub.json"
     assert cfg.max_react_steps == 12
     assert cfg.rag_chunk_size == 50
     assert cfg.rag_top_k == 4
@@ -40,13 +39,11 @@ def test_load_config_reads_toml_file(tmp_path: Path) -> None:
 def test_env_overrides_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     state = tmp_path / ".kairos"
     state.mkdir()
-    (state / "config.toml").write_text('[llm]\nbackend = "mcp"\nmcp_url = "http://from-file:1"\n', encoding="utf-8")
+    (state / "config.toml").write_text('[llm]\nbackend = "ollama"\n', encoding="utf-8")
     monkeypatch.setenv("KAIROS_LLM_BACKEND", "stub")
-    monkeypatch.setenv("KAIROS_MCP_URL", "http://from-env:2")
 
     cfg = load_config(tmp_path)
     assert cfg.llm_backend == "stub"
-    assert cfg.mcp_url == "http://from-env:2"
 
 
 def test_load_config_handles_partial_file(tmp_path: Path) -> None:

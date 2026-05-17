@@ -8,7 +8,7 @@ Karpathy ingest workflow:
   5. Update wiki/index.md.
   6. Append wiki/log.md.
 
-In v0.1 we keep this surgical: one llm-mcp call per source, the LLM is asked
+In v0.1 we keep this surgical: one LLM provider call per source, the LLM is asked
 to return a strict JSON envelope describing what to write. We then write the
 files locally in Python. This keeps the LLM stateless and the file writes
 auditable.
@@ -26,7 +26,7 @@ from pathlib import Path
 from textwrap import dedent
 from typing import Any
 
-from kairos.llm.mcp_client import LLMClient
+from kairos.llm.providers import LLMClient
 from kairos.memory.wiki_index import WikiIndexer
 from kairos.utils.paths import WikiPaths
 from kairos.wiki.schema import (

@@ -79,7 +79,7 @@ Reflexion is an inference-time framework that lets a language agent learn from i
 kairos run "Draft and refine a short answer" --technique reflexion
 ```
 
-- v0.1 reflexion runner does a 3-stage handoff: `chatgpt_send` draft → `claude_send` critique → `chatgpt_send` revise (via `llm-mcp`).
+- v0.1 reflexion runner does a 3-stage handoff: `chatgpt_send` draft -> `claude_send` critique -> `chatgpt_send` revise via the configured provider.
 - Default `max_iterations = 1` (one critique-revise cycle); set higher for multi-round refinement.
 - Trace (draft, critique, revision) written to `outputs/run-<id>/trace.jsonl` for audit.
 - Falls back gracefully: if Claude critique fails, the draft is returned unchanged with a noted warning.

@@ -1,6 +1,6 @@
 # kairos installer (Windows PowerShell). Idempotent.
 # Prefers `uv tool install`, then `pipx install`, then `pip install --user`.
-param([string]$Version = '0.3.0')
+param([string]$Version = '0.4.0')
 
 $PkgName = 'kairos-agent'
 $Pkg = "kairos-agent==$Version"

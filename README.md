@@ -10,25 +10,22 @@
     <a href="https://github.com/vinothhacks/kairos/actions"><img alt="CI" src="https://github.com/vinothhacks/kairos/workflows/ci/badge.svg"></a>
   </p>
   <p>
-    <a href="#install">Install</a> · <a href="#30-second-demo">Demo</a> · <a href="#whats-new-in-v03">What's new in v0.3</a> · <a href="#why-kairos">Why kairos</a> · <a href="#quickstart">Quickstart</a> · <a href="#how-it-works">How it works</a> · <a href="#commands">Commands</a> · <a href="#roadmap">Roadmap</a>
+    <a href="#install">Install</a> · <a href="#30-second-demo">Demo</a> · <a href="#whats-new-in-v04">What's new in v0.4</a> · <a href="#why-kairos">Why kairos</a> · <a href="#quickstart">Quickstart</a> · <a href="#how-it-works">How it works</a> · <a href="#commands">Commands</a> · <a href="#configuration">Configuration</a>
   </p>
 </div>
 
 ---
 
-## What's new in v0.3
+## What's new in v0.4
 
-**v0.3.0 closes the v3 audit scope: 5 KAI3 supply-chain/install findings plus 30 KAI2 carryovers.** Highlights:
+**v0.4.0 replaces the single llm-mcp shim with direct backends and makes kairos an MCP server.** Highlights:
 
-- **Hardened release pipeline** - SHA-pinned actions, job-scoped publish permissions, and tag/version verification before PyPI publish.
-- **Pinned installers** - one-liners default to `kairos-agent==0.3.0` with explicit override hooks.
-- **Clean JSON output** - `kairos run --json` and `--json --dry` emit parseable JSON only.
-- **Immediate wiki index** - `kairos init` seeds `wiki_index` so selector/query do not start cold.
-- **Config parity** - `[wiki]`, `[selector]`, `[sources]`, BOM files, and case-insensitive backend values now work as documented.
-- **Safer plugins** - third-party runner entry points require opt-in or allow-listing before import.
-- **Run history** - `kairos history` and `kairos feedback-list` expose stored runs and feedback.
+- **Direct model backends** - `stub`, `ollama`, `openai`, `anthropic`, and `openai_compat`.
+- **MCP server mode** - `kairos mcp serve` exposes seven tools to Cursor, Claude Desktop, and custom MCP clients.
+- **Safer default** - `KAIROS_LLM_BACKEND` defaults to `stub`; `mcp` is removed with a clear migration error.
+- **Audit gates closed** - Ruff, mypy, Bandit, strict `pip-audit`, Radon, Semgrep, MCP smoke, live Ollama, and KAI2 regression report are required CI checks.
 
-Full migration notes: [`docs/UPGRADING.md`](docs/UPGRADING.md). Existing v0.2 wikis upgrade in place.
+Full migration notes: [`docs/UPGRADING.md`](docs/UPGRADING.md). MCP setup: [`docs/MCP.md`](docs/MCP.md).
 
 ## Install
 
@@ -36,7 +33,7 @@ Full migration notes: [`docs/UPGRADING.md`](docs/UPGRADING.md). Existing v0.2 wi
 pip install kairos-agent
 ```
 
-That's it. Zero API keys. Every model call routes through [llm-mcp](https://github.com/vinothhacks/llm-mcp) so you reuse your existing ChatGPT and Claude sessions.
+That's it. By default kairos uses the deterministic `stub` backend. Point it at Ollama, OpenAI, Anthropic, or any OpenAI-compatible server when you want live model calls.
 
 ```bash
 # or, with uv
@@ -45,12 +42,12 @@ uv tool install kairos-agent
 
 ```powershell
 # Windows
-irm https://raw.githubusercontent.com/vinothhacks/kairos/v0.3.0/install.ps1 | iex
+irm https://raw.githubusercontent.com/vinothhacks/kairos/v0.4.0/install.ps1 | iex
 ```
 
 ```bash
 # macOS / Linux
-curl -fsSL https://raw.githubusercontent.com/vinothhacks/kairos/v0.3.0/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/vinothhacks/kairos/v0.4.0/install.sh | sh
 ```
 
 ## 30-second demo
@@ -139,9 +136,10 @@ flowchart LR
     DB --> WI["wiki_index"]
     DB --> WR["wiki_relations"]
 
-    CLI -->|backend=mcp| MCP["MCPLLMClient<br/>retries + backoff"]
-    MCP --> LLM["llm-mcp server"]
-    CLI --> Doc["kairos doctor<br/>real ping"] --> MCP
+    CLI --> Providers["LLM providers<br/>stub / ollama / openai / anthropic / compat"]
+    Providers --> LLM["model runtime"]
+    CLI --> MCPServer["kairos mcp serve<br/>stdio MCP tools"]
+    CLI --> Doc["kairos doctor<br/>provider probe"] --> Providers
     CLI --> FBcmd["kairos feedback"] --> FB
 ```
 
@@ -165,18 +163,19 @@ See [`docs/architecture.md`](docs/architecture.md) for the full diagram.
 | `kairos run "<task>" --dry` | Show the top-3 candidate techniques without running. |
 | `kairos history` | List recent runs from `.kairos/kairos.db`. |
 | `kairos feedback-list` | List saved feedback rows. |
+| `kairos mcp serve` | Serve kairos tools over stdio MCP. |
 | `kairos doctor` | Print env diagnostics. |
 | `kairos version` | Print version. |
 
-## What ships in v0.1
+## Current surface
 
 | | Count | Status |
 |---|---|---|
 | Concept pages (seed wiki) | 21 | doc-only |
 | Runner-backed techniques | 3 | RAG, ReAct, Reflexion |
-| Unit tests | 48 | green |
-| Backends | 1 | SQLite (Postgres optional) |
-| LLM bridge | 1 | `llm-mcp` (no API keys) |
+| Tests | 115+ | unit, integration, regression |
+| Storage backend | 1 | SQLite |
+| LLM providers | 5 | stub, Ollama, OpenAI, Anthropic, OpenAI-compatible |
 
 The 21 seed concept pages: rag, react, reflexion, chain-of-thought, tree-of-thoughts, self-consistency, self-refine, constitutional-ai, plan-and-execute, few-shot-prompting, zero-shot-prompting, function-calling, tool-use, prompt-injection, embedding-search, hybrid-search, hyde, rerank, router-agent, memory-buffer, llm-wiki.
 
@@ -190,7 +189,7 @@ The 21 seed concept pages: rag, react, reflexion, chain-of-thought, tree-of-thou
 | Lint for contradictions | **yes** | manual | no | no |
 | Pick technique automatically | **yes** | no | no | no |
 | Execute the technique | **yes** | no | no | no |
-| Zero API keys (uses MCP) | **yes** | no | no | no |
+| Local-first model option | **yes** | no | no | partial |
 | CLI-first | yes | no | no | no |
 
 The wedge: **executable wiki, not passive notes.**
@@ -198,20 +197,33 @@ The wedge: **executable wiki, not passive notes.**
 ## Configuration
 
 ```bash
-# Where kairos finds llm-mcp (default: localhost:8765)
-export KAIROS_MCP_URL="http://localhost:8765"
-
-# Use a stub LLM client for offline tests
+# Default: deterministic stub backend for offline tests
 export KAIROS_LLM_BACKEND="stub"
+
+# Local Ollama
+export KAIROS_LLM_BACKEND="ollama"
+export KAIROS_OLLAMA_MODEL="llama3.1"
+
+# OpenAI / Anthropic
+export KAIROS_LLM_BACKEND="openai"
+export OPENAI_API_KEY="..."
+export KAIROS_OPENAI_MODEL="gpt-4o-mini"
+
+export KAIROS_LLM_BACKEND="anthropic"
+export ANTHROPIC_API_KEY="..."
+
+# LM Studio / vLLM / OpenRouter / Ollama OpenAI mode
+export KAIROS_LLM_BACKEND="openai_compat"
+export KAIROS_LLM_BASE_URL="http://localhost:1234/v1"
+export KAIROS_LLM_MODEL="local-model"
 ```
 
 Per-project config lives in `.kairos/config.toml`. Run `kairos doctor` to see resolved values.
 
 ## Roadmap
 
-- **v0.1** *(now)* — 21 seed pages, 3 runners, SQLite logging, MCP bridge.
-- **v0.2** — `--fix` for lint, technique outcome scoring (the selector learns from past runs), 5 more runners.
-- **v0.3** — Composite techniques (Reflexion-over-ReAct, ToT-with-retrieval), Postgres backend, multi-user wikis.
+- **v0.4** *(now)* — direct providers, `kairos mcp serve`, required audit gates.
+- **v0.5** — remove the compatibility `kairos.llm.mcp_client` import shim and expand provider cassettes.
 - **v1.0** — Plugin runners (`pip install kairos-runner-tot`), web preview server.
 
 See `CHANGELOG.md` for what landed in each release.

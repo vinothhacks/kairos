@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from textwrap import dedent
 
-from kairos.llm.mcp_client import LLMClient
+from kairos.llm.providers import LLMClient
 from kairos.runners.base import Runner, RunRecorder, RunResult
 from kairos.utils.paths import WikiPaths
 

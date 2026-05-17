@@ -89,6 +89,6 @@ kairos run "Find the most relevant raw/ file for my task" --technique react
 
 - v0.1 tools available to the loop: `search_web(q)`, `read_file(path)`, `finish(answer)`.
 - Default `max_steps = 6` (cap on Thought/Action/Observation iterations).
-- LLM call: `claude_send` per step via `llm-mcp`.
+- LLM call: `claude_send` per step via the configured provider.
 - The full Thought/Action/Observation trace is written to `outputs/run-<id>/trace.jsonl` for audit.
 - The runner exits non-zero only if the LLM bridge itself fails; an unparseable reply becomes the final answer (defensive default).

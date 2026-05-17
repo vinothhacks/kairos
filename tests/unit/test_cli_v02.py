@@ -60,6 +60,17 @@ def test_doctor_runs_without_error(initialized_project: Path, runner: CliRunner)
     # The CLI doesn't take --project on doctor today; just exercise default path.
     assert result.exit_code == 0
     assert "kairos" in result.stdout.lower() or "doctor" in result.stdout.lower()
+    assert "stub backend, no network" in result.stdout
+    assert "llm-mcp" not in result.stdout
+
+
+def test_doctor_reports_removed_mcp_backend(runner: CliRunner) -> None:
+    """v0.4: the old llm-mcp backend is a migration error, not a liveness probe."""
+    result = runner.invoke(app, ["doctor"], env={"KAIROS_LLM_BACKEND": "mcp"})
+
+    assert result.exit_code == 0
+    assert "migration required" in result.stdout.lower()
+    assert "ollama" in result.stdout
 
 
 def test_query_command_does_not_crash_on_lint_severity_label(

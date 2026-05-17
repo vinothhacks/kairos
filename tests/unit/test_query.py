@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from kairos.llm.mcp_client import StubLLMClient
+from kairos.llm.providers import StubLLMClient
 from kairos.wiki.init import init_project
 from kairos.wiki.query import query_wiki
 

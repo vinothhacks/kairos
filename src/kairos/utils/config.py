@@ -5,8 +5,7 @@ Resolution order: env > .kairos/config.toml > built-in defaults.
 Recognized TOML layout:
 
     [llm]
-    backend = "mcp"           # or "stub"
-    mcp_url = "http://localhost:8765"
+    backend = "stub"          # stub, ollama, openai, anthropic, openai_compat
     stub_path = ""            # path to a JSON file of canned stub responses
 
     [runners]
@@ -28,7 +27,6 @@ Recognized TOML layout:
 Recognized env vars (override file):
 
     KAIROS_LLM_BACKEND   -> llm.backend
-    KAIROS_MCP_URL       -> llm.mcp_url
     KAIROS_STUB_PATH     -> llm.stub_path
 """
 from __future__ import annotations
@@ -39,8 +37,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 _DEFAULTS: dict[str, object] = {
-    "llm_backend": "mcp",
-    "mcp_url": "http://localhost:8765",
+    "llm_backend": "stub",
+    "mcp_url": "",
     "stub_path": "",
     "max_react_steps": 6,
     "rag_chunk_size": 30,
@@ -58,8 +56,8 @@ _DEFAULTS: dict[str, object] = {
 class KairosConfig:
     """Resolved settings used across the CLI, runners, and lint."""
 
-    llm_backend: str = "mcp"
-    mcp_url: str = "http://localhost:8765"
+    llm_backend: str = "stub"
+    mcp_url: str = ""
     stub_path: str = ""
     max_react_steps: int = 6
     rag_chunk_size: int = 30
@@ -91,8 +89,6 @@ def _from_toml(path: Path) -> dict[str, object]:  # noqa: C901
         if "backend" in llm:
             backend = str(llm["backend"])
             flat["llm_backend"] = backend.lower().strip()
-        if "mcp_url" in llm:
-            flat["mcp_url"] = str(llm["mcp_url"])
         if "stub_path" in llm:
             flat["stub_path"] = str(llm["stub_path"])
     runners = data.get("runners", {}) if isinstance(data, dict) else {}
@@ -144,8 +140,6 @@ def _from_env(env: dict[str, str]) -> dict[str, object]:
     if env.get("KAIROS_LLM_BACKEND"):
         backend = env["KAIROS_LLM_BACKEND"]
         flat["llm_backend"] = backend.lower().strip()
-    if env.get("KAIROS_MCP_URL"):
-        flat["mcp_url"] = env["KAIROS_MCP_URL"]
     if env.get("KAIROS_STUB_PATH"):
         flat["stub_path"] = env["KAIROS_STUB_PATH"]
     return flat

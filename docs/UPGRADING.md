@@ -1,6 +1,52 @@
 # Upgrading kairos
 
-This page covers in-place upgrades between minor releases. The TL;DR for v0.2.x -> v0.3.0: no migration is required, but installers now default to the exact release version and shared database homes are project-namespaced.
+This page covers in-place upgrades between minor releases. The TL;DR for v0.3.x -> v0.4.0: replace `KAIROS_LLM_BACKEND=mcp` with a direct backend (`ollama`, `openai`, `anthropic`, `openai_compat`, or `stub`).
+
+---
+
+## v0.3.x -> v0.4.0
+
+### Breaking change
+
+`KAIROS_LLM_BACKEND=mcp` was removed. Kairos no longer talks to a separate `llm-mcp` HTTP shim. Use one of:
+
+| Backend | Required env | Optional env |
+|---|---|---|
+| `stub` | none | `KAIROS_STUB_PATH` |
+| `ollama` | local Ollama server | `KAIROS_OLLAMA_URL`, `KAIROS_OLLAMA_MODEL` |
+| `openai` | `OPENAI_API_KEY` | `KAIROS_OPENAI_MODEL` |
+| `anthropic` | `ANTHROPIC_API_KEY` | `KAIROS_ANTHROPIC_MODEL` |
+| `openai_compat` | `KAIROS_LLM_BASE_URL` | `KAIROS_LLM_API_KEY`, `KAIROS_LLM_MODEL` |
+
+Examples:
+
+```bash
+export KAIROS_LLM_BACKEND=ollama
+export KAIROS_OLLAMA_MODEL=llama3.1
+
+export KAIROS_LLM_BACKEND=openai
+export OPENAI_API_KEY=sk-...
+```
+
+### MCP clients
+
+Install the optional extra and add `kairos mcp serve` to Cursor, Claude Desktop, or any stdio MCP client:
+
+```bash
+pip install "kairos-agent[mcp-server]"
+kairos mcp serve
+```
+
+See [`MCP.md`](MCP.md) for ready-to-paste client config.
+
+### Worth knowing
+
+| Change | Impact |
+|---|---|
+| **Default backend is `stub`** | New installs run safely without a network or API key. |
+| **Provider retry helper** | HTTP providers share bounded retry/backoff for transient provider errors. |
+| **Audit gates are required** | Ruff, mypy, Bandit, `pip-audit`, Radon, Semgrep, MCP smoke, live Ollama, and KAI2 regression reports run in CI. |
+| **Installers pin v0.4.0** | `install.ps1` and `install.sh` default to `kairos-agent==0.4.0`. |
 
 ---
 

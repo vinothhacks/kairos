@@ -53,13 +53,93 @@ jobs:
       - name: Mypy (src + tests)
         run: uv run mypy src/ tests/
 
-      - name: pip-audit (KAI-013)
-        run: uv run pip-audit --strict --ignore-vuln PYSEC-2022-43012 || true
+      - name: Bandit security audit
+        run: uv run bandit -ll -r src/
+
+      - name: pip-audit
+        run: |
+          uv export --extra dev --group dev --no-emit-project --format requirements-txt --output-file audit-requirements.txt > /dev/null
+          uv run pip-audit --strict -r audit-requirements.txt
+
+      - name: Radon complexity average
+        run: |
+          set -e
+          uv run radon cc -a src/ | tee radon.txt
+          python - <<'PY'
+          import re
+          from pathlib import Path
+
+          text = Path("radon.txt").read_text(encoding="utf-8")
+          match = re.search(r"Average complexity:\s+([A-F])", text)
+          if not match:
+              raise SystemExit("radon average complexity line missing")
+          grade = match.group(1)
+          if grade > "B":
+              raise SystemExit(f"radon average complexity too high: {grade}")
+          PY
+
+      - name: Semgrep security audit
+        run: uvx semgrep --config p/python --config p/security-audit --error src/
+
+      - name: v2 regression closure report
+        run: uv run python tests/regression/v2/v2_verification.py | tee v2-regression.txt
+
+      - name: Upload v2 regression report
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4
+        with:
+          name: v2-regression-report
+          path: v2-regression.txt
+          retention-days: 7
+
+  mcp-smoke:
+    name: mcp-smoke
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+
+      - name: Set up kairos (uv venv, no --system)
+        uses: ./.github/actions/setup-kairos
+        with:
+          python-version: "3.13"
+          extras: "[dev]"
+
+      - name: MCP server smoke
+        run: uv run pytest tests/integration/test_mcp_server.py tests/unit/test_cli_mcp_subcommand.py
+
+  live-ollama:
+    name: live-ollama
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+
+      - name: Set up kairos (uv venv, no --system)
+        uses: ./.github/actions/setup-kairos
+        with:
+          python-version: "3.13"
+          extras: "[dev]"
+
+      - name: Start Ollama
+        run: |
+          docker run -d --name ollama -p 11434:11434 ollama/ollama:latest
+          for i in {1..30}; do
+            if curl -fsS http://127.0.0.1:11434/api/tags >/dev/null; then
+              exit 0
+            fi
+            sleep 2
+          done
+          docker logs ollama
+          exit 1
+
+      - name: Pull tiny local model
+        run: docker exec ollama ollama pull qwen2:0.5b
+
+      - name: Live Ollama provider smoke
+        run: KAIROS_LIVE=ollama KAIROS_LLM_BACKEND=ollama KAIROS_OLLAMA_MODEL=qwen2:0.5b uv run pytest tests/integration/test_ollama_live.py -m live
 
   build:
     name: build wheel
     runs-on: ubuntu-latest
-    needs: [test, lint]
+    needs: [test, lint, mcp-smoke, live-ollama]
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
 

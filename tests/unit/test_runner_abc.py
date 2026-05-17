@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 import kairos.runners as runners_mod
-from kairos.llm.mcp_client import StubLLMClient
+from kairos.llm.providers import StubLLMClient
 from kairos.runners import REGISTRY, RUNNERS, Runner, dispatch, runner_for
 from kairos.runners.base import RunResult
 

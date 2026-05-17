@@ -5,7 +5,7 @@ import json
 from collections.abc import Mapping
 from pathlib import Path
 
-from kairos.llm.mcp_client import StubLLMClient
+from kairos.llm.providers import StubLLMClient
 from kairos.wiki.ingest import ingest_file
 from kairos.wiki.init import init_project
 from kairos.wiki.schema import parse_page

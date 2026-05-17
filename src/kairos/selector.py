@@ -18,7 +18,7 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-from kairos.llm.mcp_client import LLMClient
+from kairos.llm.providers import LLMClient
 from kairos.memory.wiki_index import WikiIndexer
 from kairos.utils.paths import WikiPaths
 from kairos.wiki.schema import parse_page

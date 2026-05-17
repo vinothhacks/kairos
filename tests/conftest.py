@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from kairos.llm.mcp_client import StubLLMClient
+from kairos.llm.providers import StubLLMClient
 
 
 @pytest.fixture(autouse=True)

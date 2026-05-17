@@ -19,7 +19,7 @@ from pathlib import Path
 
 import pytest
 
-from kairos.llm.mcp_client import StubLLMClient
+from kairos.llm.providers import StubLLMClient
 from kairos.runners import dispatch
 from kairos.wiki.init import init_project
 

@@ -7,7 +7,7 @@ Subcommands:
     lint      health-check the wiki
     run       pick + execute a technique for a task
     feedback  rate a previous run (writes to .kairos/kairos.db)
-    doctor    print env diagnostics + probe llm-mcp
+    doctor    print env diagnostics + probe the configured LLM provider
     version   print the package version
 
 Every command is a thin wrapper over a function in src/kairos/wiki/ or
@@ -24,7 +24,7 @@ from rich.console import Console
 from rich.table import Table
 
 from kairos import __version__
-from kairos.llm.mcp_client import LLMClient, LLMError, MCPLLMClient, MCPUnreachable
+from kairos.llm.providers import LLMClient, LLMError, MCPUnreachable
 from kairos.utils.config import load_config
 from kairos.utils.paths import WikiPaths, resolve_root
 from kairos.wiki.init import init_project
@@ -38,6 +38,11 @@ app = typer.Typer(
     help="kairos - Stop guessing. Run the right pattern. A CLI for executable agent knowledge.",
     rich_markup_mode=None,
 )
+mcp_app = typer.Typer(
+    add_completion=False,
+    help="Run kairos as a stdio MCP server for Cursor, Claude Desktop, and other clients.",
+)
+app.add_typer(mcp_app, name="mcp")
 console = Console()
 
 
@@ -45,6 +50,17 @@ console = Console()
 def version() -> None:
     """Print the kairos version."""
     console.print(f"kairos [bold cyan]{__version__}[/]")
+
+
+@mcp_app.command("serve")
+def mcp_serve() -> None:
+    """Serve kairos tools over stdio MCP."""
+    try:
+        from kairos.mcp.server import run_stdio_server
+    except RuntimeError as exc:
+        console.print(f"[red]error[/]: {exc}")
+        raise typer.Exit(2) from exc
+    run_stdio_server()
 
 
 @app.command()
@@ -86,7 +102,7 @@ def ingest(
     try:
         result = ingest_file(source, project_root=root, llm=llm, max_concept_updates=max_updates)
     except MCPUnreachable as e:
-        console.print(f"[red]llm-mcp unreachable[/]: {e}")
+        console.print(f"[red]llm provider unreachable[/]: {e}")
         raise typer.Exit(3) from e
     except LLMError as e:
         # KAI-009: catch LLMError generically so 5xx / non-JSON / 4xx surface clean.
@@ -130,7 +146,7 @@ def query(
             save_to_wiki=save or cfg.auto_save_query_answers,
         )
     except MCPUnreachable as e:
-        console.print(f"[red]llm-mcp unreachable[/]: {e}")
+        console.print(f"[red]llm provider unreachable[/]: {e}")
         raise typer.Exit(3) from e
     except LLMError as e:
         console.print(f"[red]llm error[/]: {e}")
@@ -158,7 +174,7 @@ def lint(
     try:
         result = lint_wiki(project_root=root, llm=llm, fix=fix, stale_after_days=cfg.stale_after_days)
     except MCPUnreachable as e:
-        console.print(f"[red]llm-mcp unreachable[/]: {e}")
+        console.print(f"[red]llm provider unreachable[/]: {e}")
         raise typer.Exit(3) from e
     except LLMError as e:
         console.print(f"[red]llm error[/]: {e}")
@@ -276,7 +292,7 @@ def run(
             **runner_kwargs,
         )
     except MCPUnreachable as e:
-        console.print(f"[red]llm-mcp unreachable[/]: {e}")
+        console.print(f"[red]llm provider unreachable[/]: {e}")
         raise typer.Exit(3) from e
     except LLMError as e:
         console.print(f"[red]llm error[/]: {e}")
@@ -438,7 +454,7 @@ def list_feedback(
 
 @app.command()
 def doctor() -> None:
-    """Print environment diagnostics: paths, llm-mcp reachability, schema validity."""
+    """Print environment diagnostics: paths, provider reachability, schema validity."""
     root = resolve_root()
     paths = WikiPaths(root=root)
     cfg = load_config(root)
@@ -460,20 +476,24 @@ def doctor() -> None:
             "[yellow]warning[/]",
             "config.toml had a UTF-8 BOM; parsed with utf-8-sig",
         )
-    # KAI-011: real liveness probe instead of a hard-coded 'ok'.
+    # KAI-011/v0.4: real liveness probe instead of a hard-coded 'ok'.
     backend = cfg.llm_backend
-    mcp_url = cfg.mcp_url
     if backend == "mcp":
-        try:
-            client = MCPLLMClient(base_url=mcp_url, timeout_s=2.0, backoff_base=0.0, max_attempts=1)
-            reachable = client.ping()
-        except Exception:  # noqa: BLE001
-            reachable = False
-        status = "[green]ok[/]" if reachable else "[yellow]unreachable[/]"
-        detail = f"{backend} ({mcp_url}) {'live' if reachable else 'no response'}"
-    else:
+        status = "[yellow]migration required[/]"
+        detail = "llm-mcp backend was removed; use ollama, openai, anthropic, openai_compat, or stub"
+    elif backend == "stub":
         status = "[green]ok[/]"
-        detail = f"{backend} (stub backend, no network)"
+        detail = "stub backend, no network"
+    else:
+        try:
+            client = LLMClient.from_env()
+            reachable = client.ping()
+        except LLMError as exc:
+            reachable = False
+            detail = f"{backend} ({exc})"
+        else:
+            detail = f"{backend} {'live' if reachable else 'no response'}"
+        status = "[green]ok[/]" if reachable else "[yellow]unreachable[/]"
     table.add_row("llm backend", status, detail)
     table.add_row("kairos version", "[green]ok[/]", __version__)
     console.print(table)

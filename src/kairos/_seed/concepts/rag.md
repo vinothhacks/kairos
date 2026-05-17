@@ -91,5 +91,5 @@ kairos run "Summarize raw/ on topic X with citations" --technique rag
 - Default `chunk_size = 30` lines per chunk.
 - Default `top_k = 6` chunks pulled into the prompt.
 - v0.1 retrieval is local lexical scoring (token overlap + slug match). No embeddings required.
-- LLM call: `chatgpt_send` via `llm-mcp` (one round-trip).
+- LLM call: `chatgpt_send` via the configured provider (one round-trip).
 - Override the corpus folder with `--source-folder path/to/folder` (defaults to `raw/`).
